@@ -5,6 +5,7 @@
 //===========================================================================
 
 #include "cbase.h"
+#include "sourcevr/isourcevirtualreality.h"
 
 #include "materialsystem/imaterialsystem.h"
 #include "materialsystem/itexture.h"
@@ -2332,6 +2333,17 @@ void DoEnginePostProcessing( int x, int y, int w, int h, bool bFlashlightIsOn, b
 										  g_pColorCorrectionMgr->HasNonZeroColorCorrectionWeights() &&
 										  mat_colorcorrection.GetInt();
 			bool  bSplitScreenHDR		= mat_show_ab_hdr.GetInt();
+
+			// Portal VR: this pass copies the frame into _rt_FullFrameFB (desktop-window sized) and redraws
+			// the whole eye from it, which drops the headset image to window resolution. Skip it in VR
+			// until it has eye-sized buffers. Auto-exposure above still runs.
+			if ( UseVR() )
+			{
+				bPerformSoftwareAA = false;
+				bPerformBloom = false;
+				bPerformColCorrect = false;
+			}
+
 			pRenderContext->EnableColorCorrection( bPerformColCorrect );
 			if ( bPerformBloom || bPerformSoftwareAA || bPerformColCorrect )
 			{

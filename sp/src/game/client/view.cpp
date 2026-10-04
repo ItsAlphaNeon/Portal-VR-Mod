@@ -662,6 +662,13 @@ void CViewRender::SetUpViews()
 
 	C_BasePlayer *pPlayer = C_BasePlayer::GetLocalPlayer();
 
+	// Portal VR: sample the HMD before the player computes its view, so the player's eye
+	// (and Portal's eye-through-portal logic) uses this frame's head pose.
+	if ( UseVR() )
+	{
+		g_ClientVirtualReality.ProcessCurrentTrackingState( 0.0f );
+	}
+
 	// You in-view weapon aim.
 	bool bCalcViewModelView = false;
 	Vector ViewModelOrigin;
@@ -740,17 +747,6 @@ void CViewRender::SetUpViews()
 
 	if ( UseVR() )
 	{
-		// Let the headtracking read the status of the HMD, etc.
-		// This call can go almost anywhere, but it needs to know the player FOV for sniper weapon zoom, etc
-		if ( flFOVOffset == 0.0f )
-		{
-			g_ClientVirtualReality.ProcessCurrentTrackingState ( 0.0f );
-		}
-		else
-		{
-			g_ClientVirtualReality.ProcessCurrentTrackingState ( view.fov );
-		}
-
 		HeadtrackMovementMode_t hmmOverrideMode = g_pClientMode->ShouldOverrideHeadtrackControl();
 		g_ClientVirtualReality.OverrideView( &m_View, &ViewModelOrigin, &ViewModelAngles, hmmOverrideMode );
 
@@ -1279,6 +1275,12 @@ void CViewRender::Render( vrect_t *rect )
 		}
     }
 
+
+	// Portal VR: show the left eye in the desktop window.
+	if ( UseVR() )
+	{
+		g_ClientVirtualReality.DrawMirror( rect->width, rect->height );
+	}
 
 	// TODO: should these be inside or outside the stereo eye stuff?
 	g_pClientMode->PostRender();

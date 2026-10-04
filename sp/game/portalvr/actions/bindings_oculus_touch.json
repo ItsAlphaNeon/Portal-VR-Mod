@@ -1,0 +1,206 @@
+{
+	"action_manifest_version": 0,
+	"alias_info": {},
+	"app_key": "system.generated.hl2.exe",
+	"bindings": {
+		"/actions/portal": {
+			"poses": [
+				{
+					"output": "/actions/portal/in/PoseLeft",
+					"path": "/user/hand/left/pose/handgrip"
+				},
+				{
+					"output": "/actions/portal/in/PoseRight",
+					"path": "/user/hand/right/pose/handgrip"
+				}
+			],
+			"haptics": [
+				{
+					"output": "/actions/portal/out/Haptic",
+					"path": "/user/hand/left/output/haptic"
+				},
+				{
+					"output": "/actions/portal/out/Haptic",
+					"path": "/user/hand/right/output/haptic"
+				}
+			],
+			"sources": [
+				{
+					"path": "/user/hand/left/input/trigger",
+					"mode": "trigger",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/FirePortal1"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/right/input/trigger",
+					"mode": "trigger",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/FirePortal1"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/left/input/trigger",
+					"mode": "trigger",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/Use"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/right/input/trigger",
+					"mode": "trigger",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/Use"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/right/input/b",
+					"mode": "button",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/FirePortal2"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/left/input/y",
+					"mode": "button",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/FirePortal2"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/left/input/grip",
+					"mode": "trigger",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/HandGrab"
+						},
+						"pull": {
+							"output": "/actions/portal/in/GripSqueeze"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/right/input/grip",
+					"mode": "trigger",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/HandGrab"
+						},
+						"pull": {
+							"output": "/actions/portal/in/GripSqueeze"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/left/input/grip",
+					"mode": "trigger",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/GunGrab"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/right/input/grip",
+					"mode": "trigger",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/GunGrab"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/left/input/joystick",
+					"mode": "joystick",
+					"inputs": {
+						"position": {
+							"output": "/actions/portal/in/Move"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/left/input/joystick",
+					"mode": "button",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/Crouch"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/right/input/joystick",
+					"mode": "joystick",
+					"inputs": {
+						"position": {
+							"output": "/actions/portal/in/Turn"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/right/input/joystick",
+					"mode": "button",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/Recenter"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/right/input/a",
+					"mode": "button",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/Jump"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/left/input/x",
+					"mode": "button",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/Crouch"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/left/input/application_menu",
+					"mode": "button",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/Menu"
+						}
+					}
+				}
+			],
+			"skeleton": [
+				{
+					"output": "/actions/portal/in/SkeletonLeft",
+					"path": "/user/hand/left/input/skeleton/left"
+				},
+				{
+					"output": "/actions/portal/in/SkeletonRight",
+					"path": "/user/hand/right/input/skeleton/right"
+				}
+			]
+		}
+	},
+	"category": "steamvr_input",
+	"controller_type": "oculus_touch",
+	"description": "Portal VR default: gun trigger = blue, gun bumper = orange, free-hand grip = grab, left stick = move, right stick = turn",
+	"name": "Portal VR Default (Touch)",
+	"options": {},
+	"simulated_actions": []
+}

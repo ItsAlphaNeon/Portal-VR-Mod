@@ -477,6 +477,7 @@ public:
 	void SetTargetPosition( const Vector &target, const QAngle &targetOrientation );
 	void GetTargetPosition( Vector *target, QAngle *targetOrientation );
 	float ComputeError();
+	bool			UpdateObjectVRHand( CPortal_Player *pPlayer, CBaseEntity *pEntity );	// Portal VR
 	float GetLoadWeight( void ) const { return m_flLoadWeight; }
 	void SetAngleAlignment( float alignAngleCosine ) { m_angleAlignment = alignAngleCosine; }
 	void SetIgnorePitch( bool bIgnore ) { m_bIgnoreRelativePitch = bIgnore; }
@@ -1258,9 +1259,12 @@ void CPlayerPickupController::Use( CBaseEntity *pActivator, CBaseEntity *pCaller
 	{
 		CBaseEntity *pAttached = m_grabController.GetAttached();
 
+		// Portal VR: in VR the grips control holding; the trigger/bumper fire portals instead of throwing/dropping.
+		const bool bVRHold = ToPortalPlayer( m_pPlayer )->GetVRGrabMode() != CPortal_Player::VR_GRAB_NONE;
+
 		// UNDONE: Use vphysics stress to decide to drop objects
 		// UNDONE: Must fix case of forcing objects into the ground you're standing on (causes stress) before that will work
-		if ( !pAttached || useType == USE_OFF || (m_pPlayer->m_nButtons & IN_ATTACK2) || m_grabController.ComputeError() > 12 )
+		if ( !pAttached || useType == USE_OFF || ( !bVRHold && (m_pPlayer->m_nButtons & IN_ATTACK2) ) || m_grabController.ComputeError() > 12 )
 		{
 			Shutdown();
 			return;
@@ -1284,7 +1288,7 @@ void CPlayerPickupController::Use( CBaseEntity *pActivator, CBaseEntity *pCaller
 		}
 #endif
 		// +ATTACK will throw phys objects
-		if ( m_pPlayer->m_nButtons & IN_ATTACK )
+		if ( !bVRHold && ( m_pPlayer->m_nButtons & IN_ATTACK ) )
 		{
 			Shutdown( true );
 			Vector vecLaunch;
@@ -2874,6 +2878,60 @@ CBaseEntity *CWeaponPhysCannon::FindObjectInCone( const Vector &vecOrigin, const
 
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
+// Portal VR: hold the object in the free hand, keeping the grip it was grabbed
+// with. Objects grabbed from a distance are pulled to the hand.
+//-----------------------------------------------------------------------------
+bool CGrabController::UpdateObjectVRHand( CPortal_Player *pPlayer, CBaseEntity *pEntity )
+{
+	matrix3x4_t worldFromHand;
+	if ( !pPlayer->GetVRHandMatrix( pPlayer->GetVRCmd().FreeHand(), worldFromHand ) )
+		return true; // hand lost tracking: keep the last target
+
+	const matrix3x4_t &worldFromObject = pEntity->EntityToWorldTransform();
+	if ( !pPlayer->m_bVRGrabOffsetValid )
+	{
+		matrix3x4_t handFromWorld;
+		MatrixInvert( worldFromHand, handFromWorld );
+		ConcatTransforms( handFromWorld, worldFromObject, pPlayer->m_matVRHandFromObject );
+
+		// Grabbed from a distance: keep the relative rotation but bring the object's center
+		// into the palm, slightly in front of the grip.
+		Vector vecCenterWorld = pEntity->WorldSpaceCenter();
+		Vector vecCenterInHand;
+		VectorTransform( vecCenterWorld, handFromWorld, vecCenterInHand );
+		const Vector vecPalm( 5.0f, 0.0f, 0.0f );
+		if ( vecCenterInHand.DistTo( vecPalm ) > 12.0f )
+		{
+			Vector vecShift = vecPalm - vecCenterInHand;
+			pPlayer->m_matVRHandFromObject[0][3] += vecShift.x;
+			pPlayer->m_matVRHandFromObject[1][3] += vecShift.y;
+			pPlayer->m_matVRHandFromObject[2][3] += vecShift.z;
+		}
+		pPlayer->m_bVRGrabOffsetValid = true;
+	}
+
+	matrix3x4_t worldFromTarget;
+	ConcatTransforms( worldFromHand, pPlayer->m_matVRHandFromObject, worldFromTarget );
+	Vector vecTarget;
+	QAngle angTarget;
+	MatrixGetColumn( worldFromTarget, 3, vecTarget );
+	MatrixAngles( worldFromTarget, angTarget );
+
+	// Pull: move the target toward the hand gradually so the controller doesn't treat the
+	// distance as an obstruction and drop the object.
+	Vector vecCurrent = pEntity->GetAbsOrigin();
+	Vector vecToTarget = vecTarget - vecCurrent;
+	const float flMaxLead = 8.0f;
+	float flDist = vecToTarget.Length();
+	if ( flDist > flMaxLead )
+		vecTarget = vecCurrent + vecToTarget * ( flMaxLead / flDist );
+
+	SetTargetPosition( vecTarget, angTarget );
+	pPlayer->SetHeldObjectPortal( NULL );
+	return true;
+}
+
 bool CGrabController::UpdateObject( CBasePlayer *pPlayer, float flError )
 {
 	CBaseEntity *pPenetratedEntity = m_PenetratedEntity.Get();
@@ -2900,8 +2958,22 @@ bool CGrabController::UpdateObject( CBasePlayer *pPlayer, float flError )
 		return false;
 	}
 
+	// Portal VR: objects held in the free hand follow the hand.
+	CPortal_Player *pVRPlayer = ToPortalPlayer( pPlayer );
+	if ( pVRPlayer && pVRPlayer->GetVRGrabMode() == CPortal_Player::VR_GRAB_HAND )
+	{
+		return UpdateObjectVRHand( pVRPlayer, pEntity );
+	}
+
 	Vector forward, right, up;
 	QAngle playerAngles = pPlayer->EyeAngles();
+	// Portal VR: objects held by the gun float in front of its barrel.
+	Vector vecVRAimOrigin, vecVRAimDir;
+	const bool bVRGunHold = pVRPlayer && pVRPlayer->GetVRGrabMode() == CPortal_Player::VR_GRAB_GUN && pVRPlayer->GetVRAim( vecVRAimOrigin, vecVRAimDir );
+	if ( bVRGunHold )
+	{
+		VectorAngles( vecVRAimDir, playerAngles );
+	}
 	float pitch = AngleDistance(playerAngles.x,0);
 	if( !m_bAllowObjectOverhead )
 	{
@@ -2929,7 +3001,7 @@ bool CGrabController::UpdateObject( CBasePlayer *pPlayer, float flError )
 
 	
 	
-	Vector start = pPlayer->Weapon_ShootPosition();
+	Vector start = bVRGunHold ? vecVRAimOrigin : pPlayer->Weapon_ShootPosition();
 
 	// If the player is upside down then we need to hold the box closer to their feet.
 	if ( up.z < 0.0f )

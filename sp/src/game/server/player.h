@@ -539,6 +539,7 @@ public:
 	virtual void			PlayUseDenySound() {}
 
 	virtual CBaseEntity		*FindUseEntity( void );
+	virtual bool			CanUseWeaponsWhileUsing( void ) { return false; }	// Portal VR: fire while holding with the free hand
 	virtual bool			IsUseableEntity( CBaseEntity *pEntity, unsigned int requiredCaps );
 	bool					ClearUseEntity();
 	CBaseEntity				*DoubleCheckUseNPC( CBaseEntity *pNPC, const Vector &vecSrc, const Vector &vecDir );

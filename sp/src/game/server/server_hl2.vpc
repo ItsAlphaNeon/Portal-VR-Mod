@@ -6,7 +6,7 @@
 
 $Macro SRCDIR		"..\.."
 $Macro GAMENAME 	"hl2" [!$SOURCESDK]
-$Macro GAMENAME 	"hl2_with_ashpd" [$SOURCESDK]
+$Macro GAMENAME 	"portalvr" [$SOURCESDK]
 
 $Include "$SRCDIR\game\server\server_base.vpc"
 
@@ -15,12 +15,21 @@ $Configuration
 	$Compiler
 	{
 		$AdditionalIncludeDirectories	"$BASE;$SRCDIR\game\shared\hl2;.\hl2;$SRCDIR\game\shared\portal;.\portal"
-		$PreprocessorDefinitions		"$BASE;HL2_DLL;USES_SAVERESTORE;PORTAL"
+		$PreprocessorDefinitions		"$BASE;HL2_DLL;USES_SAVERESTORE;PORTAL;PORTAL_VR"
 	}
 }
 
 $Project "Server (Portal_HL2)"
 {
+	$Folder	"Source Files"
+	{
+		$Folder	"Portal VR"
+		{
+			$File	"$SRCDIR\game\shared\vr\vr_usercmd.cpp"
+			$File	"$SRCDIR\game\shared\vr\vr_usercmd.h"
+		}
+	}
+
 	$Folder	"Source Files"
 	{
 		$File	"ai_eventresponse.cpp"

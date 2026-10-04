@@ -54,6 +54,10 @@ public:
 	void					PlayerPortalled( C_Prop_Portal *pEnteredPortal );
 
 	virtual void	CalcView( Vector &eyeOrigin, QAngle &eyeAngles, float &zNear, float &zFar, float &fov );
+
+	// Portal VR
+	virtual Vector	EyePosition();
+	void			SetVRHeadPose( const Vector &vecOffset, const QAngle &angHead, bool bValid );
 	void			CalcPortalView( Vector &eyeOrigin, QAngle &eyeAngles );
 	virtual void	CalcViewModelView( const Vector& eyeOrigin, const QAngle& eyeAngles);
 
@@ -83,6 +87,11 @@ private:
 	VMatrix m_PendingPortalMatrix;
 
 	Vector	m_vEyePosition;
+
+	// Portal VR: head pose relative to the abs origin (world orientation), set every frame.
+	Vector	m_vecVRHeadOffset;
+	QAngle	m_angVRHead;
+	bool	m_bVRHeadValid;
 public:
 	CInterpolatedVar< QAngle >	m_iv_angEyeAngles;
 

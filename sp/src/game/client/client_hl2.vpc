@@ -6,7 +6,7 @@
 
 $Macro SRCDIR		"..\.."
 $Macro GAMENAME 	"hl2" [!$SOURCESDK]
-$Macro GAMENAME 	"hl2_with_ashpd" [$SOURCESDK]
+$Macro GAMENAME 	"portalvr" [$SOURCESDK]
 
 $Include "$SRCDIR\game\client\client_base.vpc"
 $Include "$SRCDIR\game\protobuf_include.vpc"
@@ -15,8 +15,14 @@ $Configuration
 {
 	$Compiler
 	{
-		$AdditionalIncludeDirectories	".\hl2;.\hl2\elements;$SRCDIR\game\shared\hl2;$BASE;.\portal;.\portal\vgui;$SRCDIR\game\shared\hl2;$SRCDIR\game\shared\portal"
-		$PreprocessorDefinitions		"$BASE;HL2_CLIENT_DLL;PORTAL"
+		$AdditionalIncludeDirectories	".\hl2;.\hl2\elements;$SRCDIR\game\shared\hl2;$BASE;.\portal;.\portal\vgui;$SRCDIR\game\shared\hl2;$SRCDIR\game\shared\portal;$SRCDIR\thirdparty\openvr\include"
+		$PreprocessorDefinitions		"$BASE;HL2_CLIENT_DLL;PORTAL;PORTAL_VR"
+	}
+
+	$Linker
+	{
+		$AdditionalDependencies			"$BASE delayimp.lib"
+		$DelayLoadedDLL					"openvr_api.dll"
 	}
 }
 
@@ -24,6 +30,25 @@ $Project "Client (Portal_HL2)"
 {
 	$Folder	"Source Files"
 	{
+		$Folder	"Portal VR"
+		{
+			$File	"vr\vr_openvr.cpp"
+			$File	"vr\vr_openvr.h"
+			$File	"vr\vr_d3d.h"
+			$File	"vr\vr_d3d.cpp"
+			{
+				$Configuration
+				{
+					$Compiler
+					{
+						$Create/UsePrecompiledHeader	"Not Using Precompiled Headers"
+					}
+				}
+			}
+			$File	"$SRCDIR\game\shared\vr\vr_usercmd.cpp"
+			$File	"$SRCDIR\game\shared\vr\vr_usercmd.h"
+		}
+
 		$File	"hud_chat.cpp"
 		$File	"c_team_objectiveresource.cpp"
 		$File	"c_team_objectiveresource.h"
@@ -182,5 +207,10 @@ $Project "Client (Portal_HL2)"
 				$File	"$SRCDIR\game\shared\portal\weapon_portalgun_shared.h"
 			}
 		}
+	}
+
+	$Folder	"Link Libraries"
+	{
+		$Lib	"$SRCDIR\thirdparty\openvr\lib\openvr_api"
 	}
 }

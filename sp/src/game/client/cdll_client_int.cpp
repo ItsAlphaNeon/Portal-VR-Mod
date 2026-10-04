@@ -123,6 +123,7 @@
 #include "mouthinfo.h"
 #include "sourcevr/isourcevirtualreality.h"
 #include "client_virtualreality.h"
+#include "vr/vr_openvr.h"
 #include "mumble.h"
 
 // NVNT includes
@@ -947,8 +948,9 @@ int CHLClient::Init( CreateInterfaceFn appSystemFactory, CreateInterfaceFn physi
 	InitFbx();
 #endif
 
-	// it's ok if this is NULL. That just means the sourcevr.dll wasn't found
-	g_pSourceVR = (ISourceVirtualReality *)appSystemFactory(SOURCE_VIRTUAL_REALITY_INTERFACE_VERSION, NULL);
+	// Portal VR: the engine's 2013 sourcevr.dll is gone; with -vr our OpenVR backend takes its
+	// place, which switches on the SDK's stereo rendering paths (see vr/vr_openvr.h).
+	g_pSourceVR = g_PortalVR.StartRuntime() ? &g_PortalVR : NULL;
 
 	factorylist_t factories;
 	factories.appSystemFactory = appSystemFactory;
@@ -1676,6 +1678,9 @@ void CHLClient::LevelShutdown( void )
 		return;
 
 	g_bLevelInitialized = false;
+
+	// Portal VR: fade the headset out while the next map loads.
+	g_ClientVirtualReality.LevelShutdown();
 
 	// Disable abs recomputations when everything is shutting down
 	CBaseEntity::EnableAbsRecomputations( false );

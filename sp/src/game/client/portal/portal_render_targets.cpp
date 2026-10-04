@@ -8,6 +8,7 @@
 #include "portal_render_targets.h"
 #include "materialsystem/imaterialsystem.h"
 #include "rendertexture.h"
+#include "vr/vr_openvr.h"
 
 //-----------------------------------------------------------------------------
 // Purpose: Called in CClientRenderTargets::InitClientRenderTargets, used to set
@@ -201,6 +202,9 @@ void CPortalRenderTargets::InitClientRenderTargets( IMaterialSystem* pMaterialSy
 
 	// Water effects & camera from the base class (standard HL2 targets)
 	BaseClass::InitClientRenderTargets( pMaterialSystem, pHardwareConfig, 512, 256 );
+
+	// Portal VR: eye render targets (only when started with -vr).
+	g_PortalVR.CreateRenderTargets( pMaterialSystem );
 }
 
 //-----------------------------------------------------------------------------
@@ -212,6 +216,7 @@ void CPortalRenderTargets::ShutdownClientRenderTargets()
 	m_Portal1Texture.Shutdown();
 	m_Portal2Texture.Shutdown();
 	m_DepthDoublerTexture.Shutdown();
+	g_PortalVR.ShutdownRenderTargets();
 
 	for ( int i = 0; i < 2; ++i )
 	{

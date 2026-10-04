@@ -79,6 +79,9 @@ PRECACHE_WEAPON_REGISTER(weapon_portalgun);
 extern ConVar sv_portal_placement_debug;
 extern ConVar sv_portal_placement_never_fail;
 ConVar beta_quickinfo_show_portal_delay("beta_quickinfo_show_portal_delay", "1", FCVAR_REPLICATED | FCVAR_ARCHIVE);
+// Portal VR: when set, the Portal-Base additions (reload fizzles portals, refire as fast as you can click)
+// are disabled so the gun behaves like the original game.
+ConVar portal_vanilla_gameplay("portal_vanilla_gameplay", "1", FCVAR_ARCHIVE, "Use the original Portal portal gun behavior (no reload-to-fizzle, no click-speed refire).");
 ConVar sv_portal_projectile_delay("sv_portal_projectile_delay", "0.5", FCVAR_REPLICATED | FCVAR_ARCHIVE, "Maximum delay after firing and before portal is placed. If set to a very high number behaviour will be the same as in normal Portal.");
 ConVar allow_portalgun_lowering_anim("allow_portalgun_lowering_anim", "0", FCVAR_GAMEDLL | FCVAR_ARCHIVE | FCVAR_REPLICATED, "Allows lowering animation (animation when you look at npc's) to play)");
 
@@ -628,6 +631,18 @@ float CWeaponPortalgun::FirePortal( bool bPortal2, Vector *pVector /*= 0*/, bool
 		pPlayer->EyeVectors( &vDirection, NULL, NULL );
 		vEye = pPlayer->EyePosition();
 
+		// Portal VR: the gun fires from its muzzle in the player's hand, where it points.
+		Vector vVRAimOrigin, vVRAimDirection;
+		const bool bVRAim = pPlayer->GetVRAim( vVRAimOrigin, vVRAimDirection );
+		if ( bVRAim )
+		{
+			QAngle angAim;
+			VectorAngles( vVRAimDirection, angAim );
+			AngleVectors( angAim, &forward, &right, &up );
+			vDirection = vVRAimDirection;
+			vEye = vVRAimOrigin;
+		}
+
 		// Check if the players eye is behind the portal they're in and translate it
 		VMatrix matThisToLinked;
 		CProp_Portal *pPlayerPortal = pPlayer->m_hPortalEnvironment;
@@ -668,10 +683,17 @@ float CWeaponPortalgun::FirePortal( bool bPortal2, Vector *pVector /*= 0*/, bool
 			}
 		}
 
-		vTracerOrigin = vEye
-			+ forward * 30.0f
-			+ right * 4.0f
-			+ up * (-5.0f);
+		if ( bVRAim )
+		{
+			vTracerOrigin = vEye;
+		}
+		else
+		{
+			vTracerOrigin = vEye
+				+ forward * 30.0f
+				+ right * 4.0f
+				+ up * (-5.0f);
+		}
 	}
 	else
 	{
@@ -863,6 +885,9 @@ static void change_portalgun_linkage_id_f( const CCommand &args )
 //-----------------------------------------------------------------------------
 bool CWeaponPortalgun::Reload(void)
 {
+	if (portal_vanilla_gameplay.GetBool())
+		return false;
+
 	CBaseCombatCharacter *pOwner = GetOwner();
 	if (!pOwner)
 		return false;
@@ -942,6 +967,9 @@ void CWeaponPortalgun::ItemPostFrame(void)
 	CBasePlayer *pOwner = ToBasePlayer(GetOwner());
 
 	if (pOwner == NULL)
+		return;
+
+	if (portal_vanilla_gameplay.GetBool())
 		return;
 
 	//Allow a refire as fast as the player can click

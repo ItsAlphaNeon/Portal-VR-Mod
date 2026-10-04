@@ -14,6 +14,8 @@
 
 // NVNT for fov updates
 #include "haptics/ihaptics.h"
+#include "client_virtualreality.h"
+#include "sourcevr/isourcevirtualreality.h"
 
 
 // Don't alias here
@@ -51,6 +53,9 @@ C_Portal_Player::C_Portal_Player()
 	m_bPitchReorientation = false;
 	m_fReorientationRate = 0.0f;
 	m_angEyeAngles.Init();
+	m_vecVRHeadOffset.Init();
+	m_angVRHead.Init();
+	m_bVRHeadValid = false;
 
 	AddVar( &m_angEyeAngles, &m_iv_angEyeAngles, LATCH_SIMULATION_VAR );
 
@@ -131,6 +136,23 @@ void C_Portal_Player::ClientThink( void )
 	//}
 }
 
+//-----------------------------------------------------------------------------
+// Portal VR: the local player's eye is wherever the HMD is.
+//-----------------------------------------------------------------------------
+void C_Portal_Player::SetVRHeadPose( const Vector &vecOffset, const QAngle &angHead, bool bValid )
+{
+	m_vecVRHeadOffset = vecOffset;
+	m_angVRHead = angHead;
+	m_bVRHeadValid = bValid;
+}
+
+Vector C_Portal_Player::EyePosition()
+{
+	if ( m_bVRHeadValid && IsLocalPlayer() && UseVR() && IsAlive() && !IsInAVehicle() )
+		return GetAbsOrigin() + m_vecVRHeadOffset;
+	return BaseClass::EyePosition();
+}
+
 void C_Portal_Player::FixTeleportationRoll( void )
 {
 	if( IsInAVehicle() ) //HL2 compatibility fix. do absolutely nothing to the view in vehicles
@@ -138,6 +160,14 @@ void C_Portal_Player::FixTeleportationRoll( void )
 
 	if( !IsLocalPlayer() )
 		return;
+
+	// Portal VR: the HMD owns the view; portal transitions only rotate the play space (yaw).
+	if ( UseVR() )
+	{
+		m_fReorientationRate = 0.0f;
+		g_bUpsideDown = false;
+		return;
+	}
 
 	// Normalize roll from odd portal transitions
 	QAngle vAbsAngles = EyeAngles();
@@ -449,6 +479,9 @@ bool C_Portal_Player::DetectAndHandlePortalTeleportation( void )
 
 			UTIL_Portal_PointTransform( m_PendingPortalMatrix, m_vEyePosition, m_vEyePosition );
 
+			if ( IsLocalPlayer() && UseVR() )
+				g_ClientVirtualReality.OnLocalPlayerPortalled( m_PendingPortalMatrix );
+
 			UTIL_Portal_AngleTransform( m_PendingPortalMatrix, m_qEyeAngles_LastCalcView, m_angEyeAngles );
 			m_angEyeAngles.x = AngleNormalize( m_angEyeAngles.x );
 			m_angEyeAngles.y = AngleNormalize( m_angEyeAngles.y );
@@ -556,7 +589,17 @@ void C_Portal_Player::CalcView( Vector &eyeOrigin, QAngle &eyeAngles, float &zNe
 			}
 			else
 			{
-				CalcPlayerView( eyeOrigin, eyeAngles, fov );
+				if ( IsLocalPlayer() && UseVR() )
+				{
+					// Portal VR: the eye is the HMD. No stair smoothing, view roll, punch or shake.
+					eyeOrigin = EyePosition();
+					eyeAngles = EyeAngles();
+					fov = GetFOV();
+				}
+				else
+				{
+					CalcPlayerView( eyeOrigin, eyeAngles, fov );
+				}
 				if( m_hPortalEnvironment.Get() != NULL )
 				{
 					//time for hax
@@ -589,7 +632,8 @@ void C_Portal_Player::CalcPortalView( Vector &eyeOrigin, QAngle &eyeAngles )
 	VectorCopy( EyeAngles(), eyeAngles );
 
 	//Re-apply the screenshake (we just stomped it)
-	vieweffects->ApplyShake( eyeOrigin, eyeAngles, 1.0 );
+	if ( !UseVR() )
+		vieweffects->ApplyShake( eyeOrigin, eyeAngles, 1.0 );
 
 	C_Prop_Portal *pPortal = m_hPortalEnvironment.Get();
 	assert( pPortal );

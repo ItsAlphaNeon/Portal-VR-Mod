@@ -942,6 +942,12 @@ void CPortal_Player::PlayerUse( void )
 		//}
 		usedSomething = UseFoundEntity( pUseEntity );
 	}
+	else if ( m_nVRUseSource != VR_GRAB_NONE )
+	{
+		// VR: nothing in reach of the hand / gun.
+		if ( m_afButtonPressed & IN_USE )
+			m_bPlayUseDenySound = true;
+	}
 	else 
 	{
 		Vector forward;
@@ -985,6 +991,15 @@ void CPortal_Player::PlayerUse( void )
 
 void CPortal_Player::PlayerRunCommand(CUserCmd *ucmd, IMoveHelper *moveHelper)
 {
+	// Portal VR: remember the latest head/hand poses for EyePosition(), aiming and grabbing.
+	m_VRCmd = ucmd->vr;
+	VRProcessGrabButtons( ucmd );
+
+	// In VR the client re-aims its play space itself after portalling, so the angles it
+	// sends are never stale pre-portal angles.
+	if( m_bFixEyeAnglesFromPortalling && m_VRCmd.IsActive() )
+		m_bFixEyeAnglesFromPortalling = false;
+
 	if( m_bFixEyeAnglesFromPortalling )
 	{
 		//the idea here is to handle the notion that the player has portalled, but they sent us an angle update before receiving that message.
@@ -1004,6 +1019,221 @@ void CPortal_Player::PlayerRunCommand(CUserCmd *ucmd, IMoveHelper *moveHelper)
 	}
 
 	BaseClass::PlayerRunCommand( ucmd, moveHelper );
+
+	VRFinishGrabButtons();
+}
+
+//-----------------------------------------------------------------------------
+// Portal VR
+//-----------------------------------------------------------------------------
+Vector CPortal_Player::EyePosition( void )
+{
+	if ( m_VRCmd.IsHmdValid() && IsAlive() && !IsInAVehicle() )
+		return GetAbsOrigin() + m_VRCmd.hmdOffset;
+	return BaseClass::EyePosition();
+}
+
+bool CPortal_Player::GetVRAim( Vector &vecOrigin, Vector &vecDirection )
+{
+	if ( !m_VRCmd.IsActive() || !m_VRCmd.IsHandValid( m_VRCmd.GunHand() ) || !IsAlive() || IsInAVehicle() )
+		return false;
+
+	vecOrigin = GetAbsOrigin() + m_VRCmd.aimOffset;
+	AngleVectors( m_VRCmd.aimAngles, &vecDirection );
+
+	// Don't let the gun shoot from inside a wall it is poking through: if anything solid is
+	// between the eye and the muzzle, fire from the eye along the same direction.
+	trace_t tr;
+	Vector vecEye = EyePosition();
+	UTIL_TraceLine( vecEye, vecOrigin, MASK_SOLID_BRUSHONLY, this, COLLISION_GROUP_NONE, &tr );
+	if ( tr.fraction < 1.0f )
+		vecOrigin = vecEye;
+	return true;
+}
+
+//-----------------------------------------------------------------------------
+// Portal VR: grabbing
+//
+// The free-hand grip grabs what the hand touches (or pulls what it points at) and
+// holds it in the hand; releasing the grip lets go with the hand's velocity.
+// The gun-hand grip picks up what the gun points at and holds it in front of the
+// barrel, like the original. The free-hand trigger presses buttons.
+// Everything goes through the stock +use pickup code; we only decide what gets
+// used, from where, and when.
+//-----------------------------------------------------------------------------
+ConVar vr_grab_radius( "vr_grab_radius", "10", FCVAR_REPLICATED, "How close (units) the hand must be to grab something." );
+ConVar vr_pull_distance( "vr_pull_distance", "96", FCVAR_REPLICATED, "How far (units) the free hand can point to pull an object." );
+ConVar vr_gun_grab_distance( "vr_gun_grab_distance", "128", FCVAR_REPLICATED, "How far (units) the gun can reach to pick something up." );
+ConVar vr_throw_max_speed( "vr_throw_max_speed", "450", FCVAR_REPLICATED, "Maximum speed (units/s) of a thrown object." );
+ConVar vr_throw_scale( "vr_throw_scale", "1.0", FCVAR_REPLICATED, "Multiplier on hand velocity when throwing." );
+
+bool CPortal_Player::GetVRHandMatrix( int hand, matrix3x4_t &worldFromHand )
+{
+	if ( !m_VRCmd.IsActive() || !m_VRCmd.IsHandValid( hand ) )
+		return false;
+	AngleMatrix( m_VRCmd.handAngles[hand], GetAbsOrigin() + m_VRCmd.handOffset[hand], worldFromHand );
+	return true;
+}
+
+void CPortal_Player::VRProcessGrabButtons( CUserCmd *ucmd )
+{
+	const int nButtons = m_VRCmd.IsActive() ? m_VRCmd.buttons : 0;
+	const int nPressed = nButtons & ~m_nVRPrevButtons;
+	const int nReleased = m_nVRPrevButtons & ~nButtons;
+	m_nVRPrevButtons = nButtons;
+	m_nVRUseSource = VR_GRAB_NONE;
+	m_nVRPendingGrabMode = VR_GRAB_NONE;
+
+	if ( !m_VRCmd.IsActive() )
+	{
+		m_nVRGrabMode = VR_GRAB_NONE;
+		return;
+	}
+
+	CBaseEntity *pHeld = GetPlayerHeldEntity( this );
+	if ( pHeld )
+	{
+		bool bDrop = false;
+		if ( m_nVRGrabMode == VR_GRAB_HAND && ( nReleased & VRBTN_HAND_GRAB ) )
+		{
+			bDrop = true;
+			m_hVRThrowObject = pHeld;
+		}
+		else if ( m_nVRGrabMode == VR_GRAB_GUN && ( nReleased & VRBTN_GUN_GRAB ) )
+		{
+			bDrop = true;
+		}
+		else if ( m_nVRGrabMode == VR_GRAB_NONE && ( nPressed & ( VRBTN_HAND_GRAB | VRBTN_GUN_GRAB ) ) )
+		{
+			bDrop = true; // picked up some other way (e.g. keyboard +use)
+		}
+
+		if ( bDrop )
+			ucmd->buttons |= IN_USE;	// a +use press while holding drops
+		return;
+	}
+
+	if ( nPressed & VRBTN_HAND_GRAB )
+	{
+		m_nVRUseSource = VR_GRAB_HAND;
+		m_nVRPendingGrabMode = VR_GRAB_HAND;
+		ucmd->buttons |= IN_USE;
+	}
+	else if ( nPressed & VRBTN_GUN_GRAB )
+	{
+		m_nVRUseSource = VR_GRAB_GUN;
+		m_nVRPendingGrabMode = VR_GRAB_GUN;
+		ucmd->buttons |= IN_USE;
+	}
+	else if ( nPressed & VRBTN_USE )
+	{
+		m_nVRUseSource = VR_GRAB_HAND;
+		m_nVRPendingGrabMode = VR_GRAB_HAND;
+		ucmd->buttons |= IN_USE;
+	}
+}
+
+void CPortal_Player::VRFinishGrabButtons()
+{
+	CBaseEntity *pHeld = GetPlayerHeldEntity( this );
+	if ( pHeld && m_nVRPendingGrabMode != VR_GRAB_NONE )
+	{
+		// Just picked something up with a VR grab.
+		m_nVRGrabMode = m_nVRPendingGrabMode;
+		m_bVRGrabOffsetValid = false;
+	}
+	else if ( !pHeld )
+	{
+		m_nVRGrabMode = VR_GRAB_NONE;
+	}
+	m_nVRUseSource = VR_GRAB_NONE;
+	m_nVRPendingGrabMode = VR_GRAB_NONE;
+
+	// Throw: give the released object the hand's velocity.
+	CBaseEntity *pThrown = m_hVRThrowObject.Get();
+	m_hVRThrowObject = NULL;
+	if ( pThrown && !pHeld )
+	{
+		IPhysicsObject *pPhys = pThrown->VPhysicsGetObject();
+		const int hand = m_VRCmd.FreeHand();
+		if ( pPhys && m_VRCmd.IsHandValid( hand ) )
+		{
+			Vector vecVel = GetAbsVelocity() + m_VRCmd.handVelocity[hand] * vr_throw_scale.GetFloat();
+			float flSpeed = vecVel.Length();
+			if ( flSpeed > vr_throw_max_speed.GetFloat() )
+				vecVel *= vr_throw_max_speed.GetFloat() / flSpeed;
+
+			// Angular velocity is given in the object's local space.
+			Vector vecAngLocal;
+			VectorIRotate( m_VRCmd.handAngVelocity[hand], pThrown->EntityToWorldTransform(), vecAngLocal );
+			AngularImpulse angImpulse( vecAngLocal.x, vecAngLocal.y, vecAngLocal.z );
+			pPhys->SetVelocity( &vecVel, &angImpulse );
+		}
+	}
+}
+
+// Something the hand can use: a pickup-able physics object or a usable entity (button).
+static bool VRIsUsable( CBaseEntity *pEntity )
+{
+	if ( !pEntity || pEntity->IsWorld() || pEntity->IsPlayer() )
+		return false;
+	return ( pEntity->ObjectCaps() & ( FCAP_IMPULSE_USE | FCAP_CONTINUOUS_USE | FCAP_ONOFF_USE ) ) != 0;
+}
+
+CBaseEntity *CPortal_Player::VRFindHandEntity( const Vector &vecHand, const Vector &vecDir )
+{
+	// 1) Touching: the closest usable thing within reach of the hand.
+	CBaseEntity *pList[64];
+	int nCount = UTIL_EntitiesInSphere( pList, ARRAYSIZE( pList ), vecHand, vr_grab_radius.GetFloat(), 0 );
+	CBaseEntity *pBest = NULL;
+	float flBestDist = FLT_MAX;
+	for ( int i = 0; i < nCount; i++ )
+	{
+		CBaseEntity *pEnt = pList[i];
+		if ( pEnt == this || !VRIsUsable( pEnt ) )
+			continue;
+		Vector vecNearest;
+		pEnt->CollisionProp()->CalcNearestPoint( vecHand, &vecNearest );
+		float flDist = vecNearest.DistTo( vecHand );
+		if ( flDist < flBestDist )
+		{
+			flBestDist = flDist;
+			pBest = pEnt;
+		}
+	}
+	if ( pBest )
+		return pBest;
+
+	// 2) Pointing: pull what the hand points at.
+	trace_t tr;
+	UTIL_TraceLine( vecHand, vecHand + vecDir * vr_pull_distance.GetFloat(), MASK_SOLID | CONTENTS_DEBRIS | CONTENTS_PLAYERCLIP, this, COLLISION_GROUP_NONE, &tr );
+	if ( tr.m_pEnt && VRIsUsable( tr.m_pEnt ) )
+		return tr.m_pEnt;
+	return NULL;
+}
+
+CBaseEntity *CPortal_Player::FindUseEntity( void )
+{
+	if ( m_nVRUseSource == VR_GRAB_NONE )
+		return BaseClass::FindUseEntity();
+
+	if ( m_nVRUseSource == VR_GRAB_GUN )
+	{
+		Vector vecOrigin, vecDir;
+		if ( !GetVRAim( vecOrigin, vecDir ) )
+			return NULL;
+		trace_t tr;
+		UTIL_TraceLine( vecOrigin, vecOrigin + vecDir * vr_gun_grab_distance.GetFloat(), MASK_SOLID | CONTENTS_DEBRIS | CONTENTS_PLAYERCLIP, this, COLLISION_GROUP_NONE, &tr );
+		return ( tr.m_pEnt && VRIsUsable( tr.m_pEnt ) ) ? tr.m_pEnt : NULL;
+	}
+
+	matrix3x4_t hand;
+	if ( !GetVRHandMatrix( m_VRCmd.FreeHand(), hand ) )
+		return NULL;
+	Vector vecHand, vecDir;
+	MatrixGetColumn( hand, 3, vecHand );
+	MatrixGetColumn( hand, 0, vecDir );
+	return VRFindHandEntity( vecHand, vecDir );
 }
 
 void CPortal_Player::CheatImpulseCommands( int iImpulse )

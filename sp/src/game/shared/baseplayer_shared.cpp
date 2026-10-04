@@ -256,13 +256,18 @@ void CBasePlayer::ItemPostFrame()
 
 
 	// check if the player is using something
+	bool bImpulsesDone = false;
 	if ( m_hUseEntity != NULL )
 	{
 #if !defined( CLIENT_DLL )
 		Assert( !IsInAVehicle() );
 		ImpulseCommands();// this will call playerUse
-#endif
+		bImpulsesDone = true;
+		if ( !CanUseWeaponsWhileUsing() )
+			return;
+#else
 		return;
+#endif
 	}
 
     if ( gpGlobals->curtime < m_flNextAttack )
@@ -288,8 +293,10 @@ void CBasePlayer::ItemPostFrame()
 	}
 
 #if !defined( CLIENT_DLL )
-	ImpulseCommands();
+	if ( !bImpulsesDone )
+		ImpulseCommands();
 #else
+	(void)bImpulsesDone;
 	// NOTE: If we ever support full impulse commands on the client,
 	// remove this line and call ImpulseCommands instead.
 	m_nImpulse = 0;

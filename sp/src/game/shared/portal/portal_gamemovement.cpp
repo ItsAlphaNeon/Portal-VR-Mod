@@ -68,6 +68,7 @@ public:
 	bool	m_bInPortalEnv;
 // Overrides
 	virtual void ProcessMovement( CBasePlayer *pPlayer, CMoveData *pMove );
+	void RoomscaleMove( const Vector &vecDelta );	// Portal VR: physical walking
 	virtual bool CheckJumpButton( void );
 
 	void FunnelIntoPortal( CProp_Portal *pPortal, Vector &wishdir );
@@ -142,6 +143,14 @@ void CPortalGameMovement::ProcessMovement( CBasePlayer *pPlayer, CMoveData *pMov
 	g_bAllowForcePortalTrace = m_bInPortalEnv;
 	g_bForcePortalTrace = m_bInPortalEnv;
 
+	// Portal VR: physically walking moves the hull (with collision) before regular movement.
+	const CUserCmd *pCmd = pPlayer->GetCurrentUserCommand();
+	if ( pCmd && pCmd->vr.IsActive() && pCmd->vr.roomscaleMove.LengthSqr() > 0.0001f &&
+		 pPlayer->GetMoveType() == MOVETYPE_WALK && !pPlayer->IsInAVehicle() )
+	{
+		RoomscaleMove( pCmd->vr.roomscaleMove );
+	}
+
 	// Run the command.
 	PlayerMove();
 
@@ -157,6 +166,44 @@ void CPortalGameMovement::ProcessMovement( CBasePlayer *pPlayer, CMoveData *pMov
 
 	//This is probably not needed, but just in case.
 	gpGlobals->frametime = flStoreFrametime;
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: Portal VR: move the hull by the distance the player physically walked.
+//			Uses the regular walk/air move code for this tick (so it slides along
+//			walls, steps up stairs and touches triggers) without changing the
+//			player's velocity.
+//-----------------------------------------------------------------------------
+void CPortalGameMovement::RoomscaleMove( const Vector &vecDelta )
+{
+	const float flFrametime = gpGlobals->frametime;
+	if ( flFrametime <= 0.0f )
+		return;
+
+	Vector vecSavedVelocity = mv->m_vecVelocity;
+	mv->m_vecVelocity.Init( vecDelta.x / flFrametime, vecDelta.y / flFrametime, 0.0f );
+
+	if ( player->GetGroundEntity() != NULL )
+	{
+		Vector vecDest = mv->GetAbsOrigin() + Vector( vecDelta.x, vecDelta.y, 0.0f );
+		trace_t pm;
+		TracePlayerBBox( mv->GetAbsOrigin(), vecDest, PlayerSolidMask(), COLLISION_GROUP_PLAYER_MOVEMENT, pm );
+		if ( pm.fraction == 1.0f && !pm.allsolid )
+		{
+			mv->SetAbsOrigin( pm.endpos );
+		}
+		else
+		{
+			StepMove( vecDest, pm );
+		}
+		StayOnGround();
+	}
+	else
+	{
+		TryPlayerMove();
+	}
+
+	mv->m_vecVelocity = vecSavedVelocity;
 }
 
 //-----------------------------------------------------------------------------

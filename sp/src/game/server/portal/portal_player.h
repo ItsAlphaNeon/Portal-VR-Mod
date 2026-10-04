@@ -49,6 +49,21 @@ public:
 
 	virtual void PlayerRunCommand(CUserCmd *ucmd, IMoveHelper *moveHelper);
 
+	// Portal VR
+	virtual Vector EyePosition( void );
+	bool GetVRAim( Vector &vecOrigin, Vector &vecDirection );	// portal gun muzzle and aim, false if not in VR
+	const VRUserCmd_t &GetVRCmd() const { return m_VRCmd; }
+
+	enum VRGrabMode_t { VR_GRAB_NONE = 0, VR_GRAB_HAND, VR_GRAB_GUN };
+	int GetVRGrabMode() const { return m_nVRGrabMode; }
+	bool GetVRHandMatrix( int hand, matrix3x4_t &worldFromHand );
+	// Grab offset (object relative to the hand), captured on the first update of a hand grab.
+	bool m_bVRGrabOffsetValid;
+	matrix3x4_t m_matVRHandFromObject;
+
+	virtual CBaseEntity *FindUseEntity( void );
+	virtual bool CanUseWeaponsWhileUsing( void ) { return m_nVRGrabMode == VR_GRAB_HAND; }
+
 	virtual int	OnTakeDamage( const CTakeDamageInfo &inputInfo );
 	virtual bool BumpWeapon( CBaseCombatWeapon *pWeapon );
 	virtual void ShutdownUseEntity( void );
@@ -88,6 +103,16 @@ public:
 	void SuppressCrosshair( bool bState ) { m_bSuppressingCrosshair = bState; }
 	
 private:
+	VRUserCmd_t m_VRCmd;
+	void VRProcessGrabButtons( CUserCmd *ucmd );
+	void VRFinishGrabButtons();
+	CBaseEntity *VRFindHandEntity( const Vector &vecHand, const Vector &vecDir );
+	int m_nVRGrabMode;
+	int m_nVRPendingGrabMode;
+	int m_nVRUseSource;			// VR_GRAB_HAND / VR_GRAB_GUN while a VR use press is being processed
+	int m_nVRPrevButtons;
+	EHANDLE m_hVRThrowObject;
+
 	CSoundPatch		*m_pWooshSound;
 
 	CNetworkVar( bool, m_bSuppressingCrosshair );

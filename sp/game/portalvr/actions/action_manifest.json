@@ -1,0 +1,63 @@
+{
+	"version": 1,
+	"default_bindings": [
+		{ "controller_type": "frame_controller", "binding_url": "bindings_frame_controller.json" },
+		{ "controller_type": "knuckles", "binding_url": "bindings_knuckles.json" },
+		{ "controller_type": "oculus_touch", "binding_url": "bindings_oculus_touch.json" }
+	],
+	"action_sets": [
+		{ "name": "/actions/portal", "usage": "single" }
+	],
+	"actions": [
+		{ "name": "/actions/portal/in/PoseLeft", "type": "pose" },
+		{ "name": "/actions/portal/in/PoseRight", "type": "pose" },
+		{ "name": "/actions/portal/in/SkeletonLeft", "type": "skeleton", "skeleton": "/skeleton/hand/left" },
+		{ "name": "/actions/portal/in/SkeletonRight", "type": "skeleton", "skeleton": "/skeleton/hand/right" },
+
+		{ "name": "/actions/portal/in/FirePortal1", "type": "boolean", "requirement": "mandatory" },
+		{ "name": "/actions/portal/in/FirePortal2", "type": "boolean", "requirement": "mandatory" },
+		{ "name": "/actions/portal/in/GunGrab", "type": "boolean" },
+		{ "name": "/actions/portal/in/HandGrab", "type": "boolean", "requirement": "mandatory" },
+		{ "name": "/actions/portal/in/GripSqueeze", "type": "vector1" },
+		{ "name": "/actions/portal/in/Use", "type": "boolean" },
+
+		{ "name": "/actions/portal/in/Move", "type": "vector2", "requirement": "mandatory" },
+		{ "name": "/actions/portal/in/Turn", "type": "vector2" },
+		{ "name": "/actions/portal/in/Jump", "type": "boolean", "requirement": "mandatory" },
+		{ "name": "/actions/portal/in/Crouch", "type": "boolean" },
+		{ "name": "/actions/portal/in/Recenter", "type": "boolean" },
+
+		{ "name": "/actions/portal/in/Menu", "type": "boolean", "requirement": "mandatory" },
+		{ "name": "/actions/portal/in/ToggleHUD", "type": "boolean" },
+		{ "name": "/actions/portal/in/QuickSave", "type": "boolean" },
+		{ "name": "/actions/portal/in/QuickLoad", "type": "boolean" },
+
+		{ "name": "/actions/portal/out/Haptic", "type": "vibration" }
+	],
+	"localization": [
+		{
+			"language_tag": "en_US",
+			"/actions/portal": "Portal",
+			"/actions/portal/in/PoseLeft": "Left Hand Pose",
+			"/actions/portal/in/PoseRight": "Right Hand Pose",
+			"/actions/portal/in/SkeletonLeft": "Left Hand Skeleton",
+			"/actions/portal/in/SkeletonRight": "Right Hand Skeleton",
+			"/actions/portal/in/FirePortal1": "Fire Blue Portal (gun hand)",
+			"/actions/portal/in/FirePortal2": "Fire Orange Portal (gun hand)",
+			"/actions/portal/in/GunGrab": "Hold Object with Gun (gun hand)",
+			"/actions/portal/in/HandGrab": "Grab / Pull Object (free hand)",
+			"/actions/portal/in/GripSqueeze": "Hand Squeeze (finger curl)",
+			"/actions/portal/in/Use": "Use / Press Button (free hand)",
+			"/actions/portal/in/Move": "Move",
+			"/actions/portal/in/Turn": "Turn",
+			"/actions/portal/in/Jump": "Jump",
+			"/actions/portal/in/Crouch": "Crouch (toggle)",
+			"/actions/portal/in/Recenter": "Recenter",
+			"/actions/portal/in/Menu": "Pause Menu",
+			"/actions/portal/in/ToggleHUD": "Toggle HUD Panel",
+			"/actions/portal/in/QuickSave": "Quick Save",
+			"/actions/portal/in/QuickLoad": "Quick Load",
+			"/actions/portal/out/Haptic": "Haptic Feedback"
+		}
+	]
+}

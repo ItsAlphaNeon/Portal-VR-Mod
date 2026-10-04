@@ -99,3 +99,15 @@ sp/src/utils/qc_eyes/Debug/QC_Eyes.res
 sp/src/utils/qc_eyes/Release/QC_Eyes.res
 sp/game/hl2ep1_with_ashpd/ep1_gamestats.dat
 sp/game/hl2ep2_with_ashpd/ep1_gamestats.dat
+
+# Portal VR
+!sp/src/thirdparty/openvr/lib/*.lib
+!sp/src/thirdparty/openvr/bin/*.dll
+sp/game/portalvr/bin/
+sp/game/portalvr/save/
+sp/game/portalvr/cfg/config.cfg
+sp/game/portalvr/console.log
+sp/game/portalvr/vr_log.txt
+smoketest_logs/
+sp/game/portalvr/resource/portalvr_*.txt
+steamvr.vrsettings.backup

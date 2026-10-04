@@ -187,6 +187,8 @@ void WriteUsercmd( bf_write *buf, const CUserCmd *to, const CUserCmd *from )
 		buf->WriteOneBit( 0 );
 	}
 #endif
+
+	WriteVRUserCmd( buf, to->vr );
 }
 
 //-----------------------------------------------------------------------------
@@ -303,4 +305,6 @@ void ReadUsercmd( bf_read *buf, CUserCmd *move, CUserCmd *from )
 		}
 	}
 #endif
+
+	ReadVRUserCmd( buf, move->vr );
 }

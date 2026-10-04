@@ -15,6 +15,7 @@
 #include "utlvector.h"
 #include "imovehelper.h"
 #include "checksum_crc.h"
+#include "vr/vr_usercmd.h"
 
 
 class bf_read;
@@ -58,6 +59,7 @@ public:
 #if defined( HL2_DLL ) || defined( HL2_CLIENT_DLL )
 		entitygroundcontact.RemoveAll();
 #endif
+		vr.Reset();
 	}
 
 	CUserCmd& operator =( const CUserCmd& src )
@@ -80,6 +82,7 @@ public:
 		mousedy				= src.mousedy;
 
 		hasbeenpredicted	= src.hasbeenpredicted;
+		vr					= src.vr;
 
 #if defined( HL2_DLL ) || defined( HL2_CLIENT_DLL )
 		entitygroundcontact			= src.entitygroundcontact;
@@ -125,6 +128,7 @@ public:
 		upmove = 0.f;
 		buttons = 0;
 		impulse = 0;
+		vr.Reset();
 	}
 
 	// For matching server and client commands for debugging
@@ -157,6 +161,9 @@ public:
 
 	// Client only, tracks whether we've predicted this command at least once
 	bool	hasbeenpredicted;
+
+	// Portal VR: head/hand poses and roomscale movement (see vr/vr_usercmd.h)
+	VRUserCmd_t vr;
 
 	// Back channel to communicate IK state
 #if defined( HL2_DLL ) || defined( HL2_CLIENT_DLL )
