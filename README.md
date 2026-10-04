@@ -11,7 +11,7 @@ It runs on your own Steam copy of Portal **without changing any of its files**. 
 ## Quick start (just play)
 
 1. Install **Portal** and **SteamVR** from Steam, and run Portal once.
-2. Download this repository (green *Code* button → *Download ZIP*, then unzip it anywhere, or `git clone`).
+2. Download this repository (green *Code* button → *Download ZIP*, then unzip it somewhere with a short path such as `C:\Games\PortalVR` or your Downloads folder, or `git clone`; very deep folders hit Windows' path length limit).
 3. Turn on your headset and controllers, start SteamVR, then double-click **`launch.bat`**.
 
 `launch.bat` finds Portal through Steam, links the mod into it (it never changes Portal's own files), and starts it in VR. The game DLLs are prebuilt, so you don't need Visual Studio. To remove the mod, delete the `portalvr` folder link inside your Portal install folder.

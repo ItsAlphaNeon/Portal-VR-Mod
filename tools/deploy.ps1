@@ -37,7 +37,7 @@ $item = Get-Item $modLink -ErrorAction SilentlyContinue
 if ($item) {
 	if ($item.LinkType -ne 'Junction') { throw "$modLink exists and is not a junction; refusing to touch it." }
 	if ($item.Target -ne $modSrc) {
-		Remove-Item $modLink -Force
+		cmd /c rmdir "$modLink"	# removes only the link (Remove-Item fails on junctions in Windows PowerShell 5.1)
 		$item = $null
 	}
 }
