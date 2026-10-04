@@ -112,10 +112,11 @@ smoketest_logs/
 sp/game/portalvr/resource/portalvr_*.txt
 steamvr.vrsettings.backup
 tools/gunmodel/build/
-sp/game/portalvr/models/vr/
-sp/game/portalvr/materials/models/vr/
 sp/game/portalvr/cfg/vr_gun_calibration.cfg
 sp/game/portalvr/*.bmp
 sp/game/portalvr/screenshots/
 sp/game/portalvr/vr_crash.txt
 **/Release/*.FileListAbsolute.txt
+# Converted RTX gun model (kept in the repo)
+!sp/game/portalvr/models/vr/**
+!sp/game/portalvr/materials/models/vr/**

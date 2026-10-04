@@ -47,7 +47,7 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
 - `tools/gunmodel/build.ps1`:
   - Runs Blender headless on `build_gun_model.py`, which writes the SMD, QC, VTFs and VMTs.
   - Then runs retail `bin/studiomdl.exe` into `sp/game/portalvr/models/vr/portalgun_rtx.mdl`.
-  - The model and materials are **gitignored** (ripped asset). A new checkout must run this script; the asset paths are script parameters.
+  - The converted model and materials are **committed** (`models/vr/`, `materials/models/vr/`), so a new checkout works without Blender. Re-run this script and commit the output after changing the model; the source asset paths are script parameters.
 - `tools/vpkget.py <pak_dir.vpk> <path> [out]` extracts files from retail VPKs. The bundled `vpk.exe` CLI is awkward to use for this.
 
 ## Architecture (where things are)

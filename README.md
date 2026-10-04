@@ -110,7 +110,7 @@ Requirements:
 # 2. Link the mod folder into Portal, copy openvr_api.dll and the localization files
 .\tools\deploy.ps1
 
-# 3. (once) build the hand-held gun model from the RTX Portal gun asset
+# 3. (optional) rebuild the hand-held gun model; the converted model is already in the repo
 .\tools\gunmodel\build.ps1             # needs Blender; paths are parameters
 
 # 4. Play
