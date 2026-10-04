@@ -7,6 +7,13 @@
 $ErrorActionPreference = 'Stop'
 $src = Join-Path $PSScriptRoot '..\sp\src' | Resolve-Path
 Push-Location $src
+# Use the newest installed C++ toolset (v143 = VS2022, v145 = VS2026).
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$vsPath = & $vswhere -latest -products * -property installationPath
+$toolset = Get-ChildItem (Join-Path $vsPath 'MSBuild\Microsoft\VC\*\Platforms\Win32\PlatformToolsets\v*') -Directory |
+	Select-Object -ExpandProperty Name | Sort-Object | Select-Object -Last 1
+if (-not $toolset) { throw 'No C++ platform toolset found (install the C++ desktop workload)' }
+Write-Host "Using toolset $toolset"
 try {
 	# VPC exits non-zero because it can't find the VS2013 registry key for the .sln; the
 	# projects themselves are written fine, so only check that they exist.
@@ -24,7 +31,7 @@ try {
 	foreach ($p in $projects) {
 		if (-not (Test-Path $p.Path)) { throw "VPC did not generate $($p.Path)" }
 		$xml = Get-Content $p.Path -Raw
-		$xml = $xml -replace '<PlatformToolset>v120(_xp)?</PlatformToolset>', '<PlatformToolset>v143</PlatformToolset>'
+		$xml = $xml -replace '<PlatformToolset>v1\d\d(_xp)?</PlatformToolset>', "<PlatformToolset>$toolset</PlatformToolset>"
 		# The 2013 code predates modern MSVC conformance rules and warnings.
 		$xml = $xml -replace '<TreatWarningAsError>true</TreatWarningAsError>', '<TreatWarningAsError>false</TreatWarningAsError>'
 		$xml = $xml -replace '(<AdditionalOptions>[^<]*/Gw)</AdditionalOptions>', '$1 /Zc:threadSafeInit- /permissive /Zc:strictStrings- /Zc:__cplusplus- /wd4005 /wd4838 /wd4091 /wd5208 /wd4996</AdditionalOptions>'

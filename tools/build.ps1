@@ -15,7 +15,9 @@ if ($Regenerate -or -not (Test-Path (Join-Path $repo 'sp\src\portalvr.sln'))) {
 	& (Join-Path $PSScriptRoot 'genprojects.ps1')
 }
 
-$msbuild = 'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe'
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+if (-not $msbuild) { throw 'MSBuild not found (install Visual Studio with the C++ desktop workload)' }
 $names = @{}
 $targetArgs = @()
 foreach ($t in $Targets) {

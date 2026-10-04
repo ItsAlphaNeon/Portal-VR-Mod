@@ -22,7 +22,11 @@ Copy-Item (Join-Path $repo 'sp\src\thirdparty\openvr\bin\openvr_api.dll') $bin -
 # The engine loads UI strings from resource\<mod folder>_<language>.txt; reuse Portal's.
 foreach ($lang in Get-ChildItem (Join-Path $PortalDir 'portal\resource') -Filter 'portal_*.txt') {
 	$dest = Join-Path $modSrc ('resource\portalvr_' + $lang.Name.Substring('portal_'.Length))
-	Copy-Item $lang.FullName $dest -Force
+	# The New Game dialog looks up #<mod folder>_ChapterN_Title, so duplicate Portal's chapter titles.
+	$text = [System.IO.File]::ReadAllText($lang.FullName)
+	$text = [regex]::Replace($text, '(?m)^(\s*)"Portal_(Chapter\d+_Title)"(.*)$', { param($m)
+		$m.Value.TrimEnd("`r") + "`r`n" + $m.Groups[1].Value + '"PortalVR_' + $m.Groups[2].Value + '"' + $m.Groups[3].Value.TrimEnd("`r") })
+	[System.IO.File]::WriteAllText($dest, $text, [System.Text.Encoding]::Unicode)
 }
 
 $item = Get-Item $modLink -ErrorAction SilentlyContinue

@@ -31,7 +31,7 @@
 			game				|all_source_engine_paths|hl2/hl2_misc.vpk
 			platform			|all_source_engine_paths|platform/platform_misc.vpk
 
-			game				|all_source_engine_paths|portal
+			game+mod							|all_source_engine_paths|portal
 			game				|all_source_engine_paths|hl2
 			platform			|all_source_engine_paths|platform
 		}

@@ -120,3 +120,13 @@ sp/game/portalvr/vr_crash.txt
 # Converted RTX gun model (kept in the repo)
 !sp/game/portalvr/models/vr/**
 !sp/game/portalvr/materials/models/vr/**
+
+# Build intermediates and game-written runtime files
+Release_portalvr/
+*.vpc.sentinel
+sp/src/lib/public/mathlib.lib
+sp/src/lib/public/raytrace.lib
+sp/src/lib/public/tier1.lib
+sp/src/lib/public/vgui_controls.lib
+sp/game/portalvr/DownloadLists/
+sp/game/portalvr/cfg/server_blacklist.txt
