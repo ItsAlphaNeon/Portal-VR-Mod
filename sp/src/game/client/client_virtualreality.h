@@ -156,6 +156,9 @@ public:
 	// feels right on the gun hand; A saves it.
 	void SetGunCalibration( bool bOn );
 	bool IsCalibratingGun() const { return m_bCalibrating; }
+	// Grab electricity editor: the sticks move the beam end points, A saves them.
+	void SetBeamEdit( bool bOn );
+	bool IsEditingBeams() const { return m_bBeamEdit; }
 	// Places the gun on the gun hand from SteamVR's hand skeleton (fist around the controller).
 	bool AutoPlaceGun( bool bVerbose );
 
@@ -167,6 +170,7 @@ private:
 	void TrackingToWorld( const matrix3x4_t &trk, const Vector &vecPlayerOrigin, matrix3x4_t &world ) const;
 	Vector TrackingOffsetToWorld( const Vector &trk ) const;	// offset from the hull center, world axes
 	void ApplyTurn( float flDegrees );
+	void UpdateSmoothTurn( C_BasePlayer *pPlayer );
 	void InitTracking( C_BasePlayer *pPlayer );
 	void CreateMaterials();
 	void UpdateMenu();				// menu button + laser pointer on the menu panel
@@ -177,6 +181,11 @@ private:
 	void DrawGunGlow();
 	void UpdateGunCalibration();
 	void SaveGunCalibration();
+	void UpdateBeamEdit();
+	void SaveBeamPositions();
+	void UpdateGunBeams( C_BaseAnimating *pGun, const matrix3x4_t &worldFromModel );
+	void FreeGunBeams();
+	void DrawBeamEditMarkers();
 	void DrawControllerModels();
 	void DrawSkeletons();
 	void DrawAxes( const matrix3x4_t &world, float flLength );
@@ -214,6 +223,9 @@ private:
 	bool			m_bCalibGrabbing;		// the free hand is holding the gun model
 	matrix3x4_t		m_FreeFromGunModel;
 	float			m_flCalibHintTime;
+	bool			m_bBeamEdit;
+	double			m_flLastSmoothTurnTime;
+	int				m_nBeamEditTarget;		// 0 = end point (barrel), 1-3 = claw tips
 
 	// SteamVR controller render models
 	struct ControllerModel_t
@@ -229,12 +241,15 @@ private:
 
 	// Gun animation / glow
 	IMaterial		*m_pGunMaterial;
-	IMaterial		*m_pGunGlassMaterial;
+	IMaterial		*m_pGunCoreMaterial;
 	float			m_flGunFireTime;
 	float			m_flGunLastNextAttack;
 	float			m_flGunHoldBlend;
 	bool			m_bGunWasHolding;
 	Vector			m_vecGunGlow;
+	struct Beam_t	*m_pGunBeam[3];			// grab electricity, claw tips -> muzzle
+	Vector			m_vecBeamPoint[4];		// world: end point, then the claw tips (for the editor markers)
+	bool			m_bBeamPointsValid;
 
 	// HUD panel
 	VMatrix			m_WorldFromHud;
@@ -251,6 +266,7 @@ private:
 
 	// Menu pointer
 	bool			m_bMenuOpen;
+	bool			m_bCreditsShown;		// end credits on the menu screen, black around it
 	bool			m_bPointerHit;
 	Vector			m_vecPointerStart;
 	Vector			m_vecPointerEnd;

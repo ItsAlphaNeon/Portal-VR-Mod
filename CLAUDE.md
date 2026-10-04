@@ -30,8 +30,9 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
 
 ## Build / deploy / run
 
-- `tools/genprojects.ps1` runs VPC (`/hl2`) and patches the generated vcxproj files for VS2022:
-  - v143 toolset
+- **Player entry point:** `launch.bat` → `tools/play.ps1`: finds Portal through Steam (`tools/findportal.ps1`, also used by deploy/launch), builds only if `bin/client.dll` is missing, runs deploy, then launch. **The prebuilt `client.dll` / `server.dll` in `sp/game/portalvr/bin` are committed** so a friend can play without Visual Studio: rebuild and commit them with every code change you ship.
+- `tools/genprojects.ps1` runs VPC (`/hl2`) and patches the generated vcxproj files:
+  - the newest installed toolset (v143 = VS2022, v145 = VS2026; MSBuild is found with vswhere)
   - warnings are not errors
   - `/permissive /Zc:threadSafeInit-` and related flags
   - `legacy_stdio_definitions`
@@ -43,8 +44,9 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
   - `"client:Rebuild"` forces a clean rebuild.
   - The output goes straight into `sp/game/portalvr/bin`.
 - `tools/deploy.ps1`: creates the junction, copies `openvr_api.dll`, and copies the localization files.
-- `tools/launch.ps1 [-Flat] [-Map x] [-Extra '+cmd val']`
-- `tools/gunmodel/build.ps1`:
+- `tools/launch.ps1 [-Flat] [-Map x] [-Extra '+cmd val'] [-Console]`
+- **Sending commands to a running game:** `hl2.exe -game portalvr -hijack +cmd arg1 arg2` (each argument a separate token). `jpeg` saves a screenshot to `portalvr/screenshots` (works in flat mode, where `vr_dump_eyes` doesn't).
+- `tools/gunmodel/build.ps1` (full guide: `tools/gunmodel/BLENDER_PIPELINE.md`):
   - Runs Blender headless on `build_gun_model.py`, which writes the SMD, QC, VTFs and VMTs.
   - Then runs retail `bin/studiomdl.exe` into `sp/game/portalvr/models/vr/portalgun_rtx.mdl`.
   - The converted model and materials are **committed** (`models/vr/`, `materials/models/vr/`), so a new checkout works without Blender. Re-run this script and commit the output after changing the model; the source asset paths are script parameters.
@@ -98,8 +100,10 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
     - Detects a shot when the weapon's `m_flNextPrimaryAttack` jumps forward.
     - Opens the claws while `IsHoldingObject()`.
     - Applies recoil to the drawn pose only.
-    - Sets `$selfillumtint` on the gun material and `$color2` on the glass tube material to the colour of the last portal fired.
-  - `DrawGunGlow` draws a sprite in the core.
+    - Sets `$selfillumtint` on the gun material and `$color2` on the core material (`portalgun_rtx_core`, the rod inside the clear glass tube) to the colour of the last portal fired.
+  - `DrawGunGlow` draws a sprite at `vr_gun_glow_x/y/z` (model space), size `vr_gun_glow_size`. The defaults are the user's in-headset tuning.
+  - **Grab electricity:** `UpdateGunBeams` draws the three lightning beams (claws → front of the barrel) while holding an object. The stock ones hang off the hidden view model, so `C_WeaponPortalgun::DoEffectHolding` keeps those off for the local VR player. Start = claw hinge + `vr_gun_beam_claw1/2/3` ("x y z" offset in model axes), swung with the claw animation; end = `vr_gun_beam_end_x/y/z`.
+  - **Grab electricity editor:** `vr_gun_beam_edit` (VR Settings → Edit grab electricity). Right grip click cycles the point (barrel end, top/left/right claw; the selected one shows axes, the others white crosses), left stick moves forward/left, right stick up/down, speed `vr_gun_beam_edit_speed` (10/s), A saves `cfg/vr_gun_beam.cfg` (exec'd from `autoexec.cfg`), B resets.
 - **Calibration:** `UpdateGunCalibration`.
   - The free-hand grip carries the gun model.
   - The right stick sets the aim yaw/pitch.
@@ -122,7 +126,8 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
 - `in_main.cpp`, `cdll_client_int.cpp`, `vgui_int.cpp`, `viewpostprocess.cpp` (bloom, AA and colour correction are off in VR).
 - `hud_crosshair.cpp`, `portal/hud_quickinfo.cpp`: no reticle in VR.
 - `portal/c_portal_player.cpp`: the HMD eye, CalcView, no roll fix-up; the local body isn't drawn in VR.
-- `portal/c_weapon_portalgun.cpp`: the world-model gun isn't drawn for the local player in VR.
+- `portal/c_weapon_portalgun.cpp`: the world-model gun isn't drawn for the local player in VR, and its view-model grab beams stay off.
+- `portal/portal_credits.cpp`: `g_bPortalRollingCredits` makes `CClientVirtualReality` show the HUD texture on the menu screen (opaque, eye level) and clear each eye to black (`m_bCreditsShown`).
 - `portal/c_prop_portal.cpp` (`Simulate`): adds the VR gun to the portal ghost-renderable list when it reaches into a portal hole. That gives the clip plane on this side and a ghost out of the linked portal.
 
 ### Shared: `sp/src/game/shared`
@@ -142,11 +147,12 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
   - The old free-hand grab code (`VRFindHandEntity`, `UpdateObjectVRHand`, `vr_grab_radius`, `vr_pull_distance`, `vr_throw_*`) is now unused.
 - `portal/weapon_physcannon.cpp`: the grab controller targets the muzzle in gun mode.
 - `portal/weapon_portalgun.cpp`: VR aim; `portal_vanilla_gameplay`.
+- `portal/portal_player.cpp` `PostThink`: feeds the nerve gas countdown (`startneurotoxins`, escape_02) into `SetBonusProgress`, which the `vgui_neurotoxin_countdown` screens display. That code was missing, so the timer read 00:00:00.
 
 ### Mod folder: `sp/game/portalvr`
 
 - `gameinfo.txt`, `cfg/autoexec.cfg` (vanilla-gameplay cvars plus `exec vr_gun_calibration.cfg`).
-- `actions/` (manifest plus bindings generated by `tools/gen_bindings.py`).
+- `actions/` (manifest plus bindings generated by `tools/gen_bindings.py`): Frame, Index (`knuckles`), Touch, Cosmos, Vive wands, WMR, Reverb G2. Orange portal is the bumper only where one exists (Frame, Cosmos).
 - `resource/gamemenu.res`.
 - Test cfgs `cfg/vrtest_*.cfg`.
 
@@ -210,6 +216,11 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
 - Gun ghost through portals.
 - Fizzler aim fix.
 - `vr_portal_view_mode 1`.
+
+**Done 2026-10-04**
+- Verified in the headset: default gun pose = the user's calibration; clear glass tube with an emissive portal-coloured core; tuned core glow; grab electricity on the VR gun (tuned with `vr_gun_beam_edit`); smooth turning per rendered frame (was per tick: judder); no crash on death (beam double free); New Game chapters.
+- Verified with the null HMD / flat test only: nerve gas timer counts down (`cl_pdump` shows `m_iBonusProgress`); credits on the menu screen (`vrtest_credits.cfg`).
+- Not exercised: the non-Frame controller bindings (Index, Touch, Cosmos, Vive, WMR, G2).
 
 **Ideas and known gaps**
 - The gun glow is a sprite plus material tint. The first-person viewmodel effects (beam, particle glow) aren't attached to the new model.

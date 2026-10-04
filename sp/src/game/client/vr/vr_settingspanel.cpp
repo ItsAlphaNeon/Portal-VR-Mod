@@ -124,6 +124,9 @@ CVRSettingsPanel::CVRSettingsPanel( VPANEL parent ) : BaseClass( NULL, "VRSettin
 	Place( pRecenter, kLabelX, y, 200, 28 );
 	Button *pCalibrate = new Button( this, "Calibrate", "Calibrate gun position", this, "calibrate" );
 	Place( pCalibrate, kControlX, y, kControlW, 28 );
+	y += 36;
+	Button *pBeamEdit = new Button( this, "BeamEdit", "Edit grab electricity", this, "beamedit" );
+	Place( pBeamEdit, kControlX, y, kControlW, 28 );
 	y += 40;
 
 	Button *pDone = new Button( this, "Done", "Done", this, "close" );
@@ -264,6 +267,11 @@ void CVRSettingsPanel::OnCommand( const char *pszCommand )
 	{
 		Close();
 		engine->ClientCmd_Unrestricted( "gameui_hide\nvr_gun_calibrate\n" );
+	}
+	else if ( !Q_stricmp( pszCommand, "beamedit" ) )
+	{
+		Close();
+		engine->ClientCmd_Unrestricted( "gameui_hide\nvr_gun_beam_edit\n" );
 	}
 	else if ( !Q_stricmp( pszCommand, "close" ) )
 	{

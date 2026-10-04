@@ -103,7 +103,9 @@ sp/game/hl2ep2_with_ashpd/ep1_gamestats.dat
 # Portal VR
 !sp/src/thirdparty/openvr/lib/*.lib
 !sp/src/thirdparty/openvr/bin/*.dll
-sp/game/portalvr/bin/
+sp/game/portalvr/bin/*
+!sp/game/portalvr/bin/client.dll
+!sp/game/portalvr/bin/server.dll
 sp/game/portalvr/save/
 sp/game/portalvr/cfg/config.cfg
 sp/game/portalvr/console.log
@@ -113,6 +115,8 @@ sp/game/portalvr/resource/portalvr_*.txt
 steamvr.vrsettings.backup
 tools/gunmodel/build/
 sp/game/portalvr/cfg/vr_gun_calibration.cfg
+sp/game/portalvr/cfg/vr_gun_beam.cfg
+sp/game/portalvr/cfg/vr_gun_glow.cfg
 sp/game/portalvr/*.bmp
 sp/game/portalvr/screenshots/
 sp/game/portalvr/vr_crash.txt

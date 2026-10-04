@@ -55,6 +55,7 @@ BEGIN_DATADESC( CPortal_Player )
 	DEFINE_FIELD( m_hPortalEnvironment, FIELD_EHANDLE ),
 	DEFINE_FIELD( m_hSurroundingLiquidPortal, FIELD_EHANDLE ),
 	DEFINE_FIELD( m_bSuppressingCrosshair, FIELD_BOOLEAN ),
+	DEFINE_FIELD( m_fNeuroToxinDamageTime, FIELD_TIME ),
 
 END_DATADESC()
 
@@ -87,6 +88,7 @@ CPortal_Player::CPortal_Player()
 	m_bPitchReorientation = false;
 	m_bSilentDropAndPickup = false;
 	m_bSuppressingCrosshair = false;
+	m_fNeuroToxinDamageTime = 0.0f;
 }
 
 CPortal_Player::~CPortal_Player( void )
@@ -286,6 +288,15 @@ void CPortal_Player::PostThink( void )
 				UTIL_ScreenFade(this, hurtScreenOverlay, 1.0f, 0.1f, FFADE_IN | FFADE_PURGE);
 			}
 		}
+	}
+
+	// Portal VR: the nerve gas countdown (startneurotoxins, escape_02). The countdown screens
+	// (C_NeurotoxinCountdown) show the player's bonus progress as minutes:seconds; nothing
+	// fed it in this code base, so the timer read 00:00:00.
+	if ( m_fNeuroToxinDamageTime > 0.0f )
+	{
+		const float flTimeLeft = MAX( 0.0f, m_fNeuroToxinDamageTime - gpGlobals->curtime );
+		SetBonusProgress( (int)ceilf( flTimeLeft ) );
 	}
 
 	UpdatePortalPlaneSounds();

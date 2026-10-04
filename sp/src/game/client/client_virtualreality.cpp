@@ -49,6 +49,11 @@ extern vgui::IInputInternal *g_InputInternal;
 #include "vguicenterprint.h"
 #include "clientleafsystem.h"
 #include "c_baseanimating.h"
+#ifdef PORTAL
+extern bool g_bPortalRollingCredits;	// portal_credits.cpp: the credits HUD element is up
+#endif
+#include "beamdraw.h"
+#include "iviewrender_beams.h"
 
 #ifdef PORTAL
 #include "c_portal_player.h"
@@ -77,12 +82,12 @@ ConVar vr_gun_scale( "vr_gun_scale", "1", FCVAR_ARCHIVE, "Size of the hand-held 
 // Pose of the gun model in the gun controller's grip space. Defaults: calibrated on the Steam
 // Frame right controller (2026-10-03). Set by vr_gun_calibrate (saved to
 // cfg/vr_gun_calibration.cfg), or from the SteamVR hand skeleton while vr_gun_calibrated is 0.
-ConVar vr_gun_x( "vr_gun_x", "3.689", FCVAR_ARCHIVE, "Gun model position in the controller grip: forward (units)." );
-ConVar vr_gun_y( "vr_gun_y", "0.630", FCVAR_ARCHIVE, "Gun model position in the controller grip: left (units)." );
-ConVar vr_gun_z( "vr_gun_z", "-6.833", FCVAR_ARCHIVE, "Gun model position in the controller grip: up (units)." );
-ConVar vr_gun_pitch( "vr_gun_pitch", "63.26", FCVAR_ARCHIVE, "Gun model rotation in the controller grip: pitch (degrees, + = down)." );
-ConVar vr_gun_yaw( "vr_gun_yaw", "-28.52", FCVAR_ARCHIVE, "Gun model rotation in the controller grip: yaw (degrees, + = left)." );
-ConVar vr_gun_roll( "vr_gun_roll", "-28.18", FCVAR_ARCHIVE, "Gun model rotation in the controller grip: roll (degrees)." );
+ConVar vr_gun_x( "vr_gun_x", "3.682", FCVAR_ARCHIVE, "Gun model position in the controller grip: forward (units)." );
+ConVar vr_gun_y( "vr_gun_y", "1.191", FCVAR_ARCHIVE, "Gun model position in the controller grip: left (units)." );
+ConVar vr_gun_z( "vr_gun_z", "-5.874", FCVAR_ARCHIVE, "Gun model position in the controller grip: up (units)." );
+ConVar vr_gun_pitch( "vr_gun_pitch", "60.82", FCVAR_ARCHIVE, "Gun model rotation in the controller grip: pitch (degrees, + = down)." );
+ConVar vr_gun_yaw( "vr_gun_yaw", "-33.81", FCVAR_ARCHIVE, "Gun model rotation in the controller grip: yaw (degrees, + = left)." );
+ConVar vr_gun_roll( "vr_gun_roll", "-33.26", FCVAR_ARCHIVE, "Gun model rotation in the controller grip: roll (degrees)." );
 ConVar vr_gun_calibrated( "vr_gun_calibrated", "1", FCVAR_ARCHIVE, "1 = use the saved gun pose (vr_gun_x...), 0 = place the gun from the SteamVR hand skeleton." );
 ConVar vr_show_controllers( "vr_show_controllers", "1", FCVAR_ARCHIVE, "Draw the SteamVR controller models: 0 = never, 1 = always, 2 = only while calibrating the gun." );
 ConVar vr_show_skeleton( "vr_debug_skeleton", "0", 0, "Debug: draw the SteamVR hand skeletons: 0 = never, 1 = always, 2 = only while calibrating the gun." );
@@ -94,6 +99,39 @@ static const Vector s_vecGunMuzzleInModel( 16.94f, 0.0f, 0.0f );
 ConVar vr_gun_aim_pitch( "vr_gun_aim_pitch", "2.97", FCVAR_ARCHIVE, "Aim direction relative to the gun model: pitch (degrees, + = down)." );
 ConVar vr_gun_aim_yaw( "vr_gun_aim_yaw", "6.84", FCVAR_ARCHIVE, "Aim direction relative to the gun model: yaw (degrees, + = left)." );
 ConVar vr_gun_aim_adjust_speed( "vr_gun_aim_adjust_speed", "15", FCVAR_ARCHIVE, "Degrees per second the right stick turns the aim while calibrating." );
+
+// Core glow sprite, in gun model space (units; +X = barrel forward, +Y = left, +Z = up).
+// Defaults tuned by the user in the headset (2026-10-04).
+ConVar vr_gun_glow_x( "vr_gun_glow_x", "4.0", FCVAR_ARCHIVE, "Gun core glow position: forward (model units)." );
+ConVar vr_gun_glow_y( "vr_gun_glow_y", "-1.08", FCVAR_ARCHIVE, "Gun core glow position: left (model units)." );
+ConVar vr_gun_glow_z( "vr_gun_glow_z", "-0.148", FCVAR_ARCHIVE, "Gun core glow position: up (model units)." );
+ConVar vr_gun_glow_size( "vr_gun_glow_size", "3.24", FCVAR_ARCHIVE, "Gun core glow sprite size (model units)." );
+
+// Grab electricity (the beams the gun shows while holding an object), in gun model space.
+// Each beam starts on a claw (offset from its hinge: along the barrel, and outward along the
+// claw, so it follows the claw animation) and ends at one point in front of the barrel.
+// Tune in the headset with vr_gun_beam_edit (saved to cfg/vr_gun_beam.cfg). Defaults: the
+// user's in-headset tuning (2026-10-04).
+ConVar vr_gun_beam_claw1( "vr_gun_beam_claw1", "9.159 1.186 0.403", FCVAR_ARCHIVE, "Grab electricity start on the top claw: offset from its hinge, model axes (x y z), swings with the claw." );
+ConVar vr_gun_beam_claw2( "vr_gun_beam_claw2", "8.190 2.404 -1.228", FCVAR_ARCHIVE, "Grab electricity start on the left claw: offset from its hinge, model axes (x y z), swings with the claw." );
+ConVar vr_gun_beam_claw3( "vr_gun_beam_claw3", "8.490 -0.547 -1.301", FCVAR_ARCHIVE, "Grab electricity start on the right claw: offset from its hinge, model axes (x y z), swings with the claw." );
+static ConVar *s_pBeamClawVars[3] = { &vr_gun_beam_claw1, &vr_gun_beam_claw2, &vr_gun_beam_claw3 };
+static Vector GetVectorCvar( const ConVar &var )
+{
+	Vector v( 0, 0, 0 );
+	sscanf( var.GetString(), "%f %f %f", &v.x, &v.y, &v.z );
+	return v;
+}
+static void SetVectorCvar( ConVar &var, const Vector &v )
+{
+	char sz[64];
+	Q_snprintf( sz, sizeof( sz ), "%.3f %.3f %.3f", v.x, v.y, v.z );
+	var.SetValue( sz );
+}
+ConVar vr_gun_beam_end_x( "vr_gun_beam_end_x", "14.436", FCVAR_ARCHIVE, "Grab electricity end point: forward (model units)." );
+ConVar vr_gun_beam_end_y( "vr_gun_beam_end_y", "0.210", FCVAR_ARCHIVE, "Grab electricity end point: left (model units)." );
+ConVar vr_gun_beam_end_z( "vr_gun_beam_end_z", "-1.621", FCVAR_ARCHIVE, "Grab electricity end point: up (model units)." );
+ConVar vr_gun_beam_edit_speed( "vr_gun_beam_edit_speed", "10", FCVAR_ARCHIVE, "Units per second the sticks move the points in vr_gun_beam_edit." );
 
 // Locomotion
 ConVar vr_move_hand_relative( "vr_move_hand_relative", "0", FCVAR_ARCHIVE, "0 = stick moves toward where you look, 1 = toward where your free hand points." );
@@ -241,13 +279,19 @@ CClientVirtualReality::CClientVirtualReality()
 	SetIdentityMatrix( m_FreeFromGunModel );
 	m_bGunAutoPlaced = false;
 	m_bCalibrating = false;
+	m_bBeamEdit = false;
+	m_flLastSmoothTurnTime = 0.0;
+	m_nBeamEditTarget = 0;
+	m_bBeamPointsValid = false;
+	for ( int i = 0; i < 3; i++ )
+		m_pGunBeam[i] = NULL;
 	m_bCalibGrabbing = false;
 	m_flCalibHintTime = 0.0f;
 	m_pControllerMaterial = NULL;
 	m_pOverlayMaterial = NULL;
 	m_pGlowMaterial = NULL;
 	m_pGunMaterial = NULL;
-	m_pGunGlassMaterial = NULL;
+	m_pGunCoreMaterial = NULL;
 	m_flGunFireTime = -100.0f;
 	m_flGunLastNextAttack = 0.0f;
 	m_flGunHoldBlend = 0.0f;
@@ -258,6 +302,7 @@ CClientVirtualReality::CClientVirtualReality()
 	m_pMirrorMaterial = NULL;
 	m_pLaserMaterial = NULL;
 	m_bMenuOpen = false;
+	m_bCreditsShown = false;
 	m_bPointerHit = false;
 	m_vecPointerStart.Init();
 	m_vecPointerEnd.Init();
@@ -423,6 +468,26 @@ void CClientVirtualReality::ApplyTurn( float flDegrees )
 	m_vecTrackingCenter.z = 0.0f;
 
 	m_flTrackingYaw = AngleNormalize( m_flTrackingYaw + flDegrees );
+}
+
+//-----------------------------------------------------------------------------
+// Smooth turning runs once per rendered frame with the real frame time. In CreateMove it
+// only advanced on game ticks (66/s), so at 90+ fps frames got zero, one or two steps:
+// a juddering rotation.
+//-----------------------------------------------------------------------------
+void CClientVirtualReality::UpdateSmoothTurn( C_BasePlayer *pPlayer )
+{
+	const double flNow = Plat_FloatTime();
+	const float flDelta = clamp( (float)( flNow - m_flLastSmoothTurnTime ), 0.0f, 0.1f );
+	m_flLastSmoothTurnTime = flNow;
+
+	if ( vr_turn_mode.GetInt() == 0 || m_bCalibrating || m_bBeamEdit || !pPlayer->IsAlive()
+		 || engine->IsPaused() || enginevgui->IsGameUIVisible() )
+		return;
+
+	const Vector2D vecTurn = g_PortalVR.GetTurnStick();
+	if ( fabsf( vecTurn.x ) > 0.15f )
+		ApplyTurn( -vecTurn.x * vr_smooth_turn_speed.GetFloat() * flDelta );
 }
 
 void CClientVirtualReality::OnLocalPlayerPortalled( const VMatrix &matPortalTransform )
@@ -669,6 +734,157 @@ void CClientVirtualReality::SaveGunCalibration()
 	engine->ClientCmd_Unrestricted( "host_writeconfig\n" );
 }
 
+void CClientVirtualReality::SetBeamEdit( bool bOn )
+{
+	if ( bOn == m_bBeamEdit )
+		return;
+	if ( bOn )
+		SetGunCalibration( false );
+	m_bBeamEdit = bOn;
+	m_flCalibHintTime = 0.0f;
+	VRLog( "Grab electricity edit %s", bOn ? "started" : "ended" );
+	if ( !bOn && internalCenterPrint )
+		internalCenterPrint->Clear();
+}
+
+void CClientVirtualReality::SaveBeamPositions()
+{
+	char szCfg[512];
+	Q_snprintf( szCfg, sizeof( szCfg ),
+		"// Portal VR grab electricity, saved by vr_gun_beam_edit\n"
+		"vr_gun_beam_claw1 \"%s\"\nvr_gun_beam_claw2 \"%s\"\nvr_gun_beam_claw3 \"%s\"\nvr_gun_beam_end_x %.3f\nvr_gun_beam_end_y %.3f\nvr_gun_beam_end_z %.3f\n",
+		vr_gun_beam_claw1.GetString(), vr_gun_beam_claw2.GetString(), vr_gun_beam_claw3.GetString(),
+		vr_gun_beam_end_x.GetFloat(), vr_gun_beam_end_y.GetFloat(), vr_gun_beam_end_z.GetFloat() );
+	FileHandle_t fh = g_pFullFileSystem->Open( "cfg/vr_gun_beam.cfg", "w", "MOD" );
+	if ( fh )
+	{
+		g_pFullFileSystem->Write( szCfg, Q_strlen( szCfg ), fh );
+		g_pFullFileSystem->Close( fh );
+	}
+	VRLog( "Grab electricity saved: %s", szCfg );
+	engine->ClientCmd_Unrestricted( "host_writeconfig\n" );
+}
+
+//-----------------------------------------------------------------------------
+// Grab electricity editor (vr_gun_beam_edit); the beams stay on and the game ignores the
+// controllers meanwhile. Moves one point at a time, shown with axes on the gun (red =
+// forward, green = left, blue = up); the other points get small white markers.
+//   right grip (click) - next point: barrel end point, top claw, left claw, right claw
+//   left stick         - forward/back (Y) and left/right (X)
+//   right stick (Y)    - up/down
+//   A                  - save and finish
+//   B                  - reset the selected point
+//-----------------------------------------------------------------------------
+void CClientVirtualReality::UpdateBeamEdit()
+{
+	if ( !m_bBeamEdit )
+		return;
+
+	static const wchar_t *s_pwszTarget[4] = { L"BARREL END POINT", L"TOP CLAW", L"LEFT CLAW", L"RIGHT CLAW" };
+	if ( g_PortalVR.GetDigital( VRACTION_HAND_GRAB, VR_HAND_RIGHT ).bPressed )
+	{
+		m_nBeamEditTarget = ( m_nBeamEditTarget + 1 ) % 4;
+		m_flCalibHintTime = 0.0f;
+		g_PortalVR.TriggerHaptic( GetGunHand(), 0.03f, 120.0f, 0.4f );
+	}
+
+	const float flStep = vr_gun_beam_edit_speed.GetFloat() * gpGlobals->frametime;
+	Vector2D vecLeft = g_PortalVR.GetMoveStick();
+	Vector2D vecRight = g_PortalVR.GetTurnStick();
+	Vector vecDelta( 0, 0, 0 );
+	if ( fabsf( vecLeft.y ) > 0.2f )
+		vecDelta.x = vecLeft.y * flStep;
+	if ( fabsf( vecLeft.x ) > 0.2f )
+		vecDelta.y = -vecLeft.x * flStep;
+	if ( fabsf( vecRight.y ) > 0.2f )
+		vecDelta.z = vecRight.y * flStep;
+
+	Vector vecPoint;
+	if ( m_nBeamEditTarget == 0 )
+	{
+		vecPoint.Init( vr_gun_beam_end_x.GetFloat(), vr_gun_beam_end_y.GetFloat(), vr_gun_beam_end_z.GetFloat() );
+		if ( !vecDelta.IsZero() )
+		{
+			vecPoint += vecDelta;
+			vr_gun_beam_end_x.SetValue( vecPoint.x );
+			vr_gun_beam_end_y.SetValue( vecPoint.y );
+			vr_gun_beam_end_z.SetValue( vecPoint.z );
+		}
+	}
+	else
+	{
+		ConVar &var = *s_pBeamClawVars[m_nBeamEditTarget - 1];
+		vecPoint = GetVectorCvar( var );
+		if ( !vecDelta.IsZero() )
+		{
+			vecPoint += vecDelta;
+			SetVectorCvar( var, vecPoint );
+		}
+	}
+
+	if ( internalCenterPrint && gpGlobals->realtime > m_flCalibHintTime )
+	{
+		m_flCalibHintTime = gpGlobals->realtime + 0.25f;
+		wchar_t wszHint[384];
+		V_snwprintf( wszHint, ARRAYSIZE( wszHint ), L"GRAB ELECTRICITY EDIT: %ls (%d/4)\nRight grip: next point    Left stick: forward/back, left/right    Right stick: up/down\nA = save    B = reset this point\n%.2f  %.2f  %.2f",
+			s_pwszTarget[m_nBeamEditTarget], m_nBeamEditTarget + 1, vecPoint.x, vecPoint.y, vecPoint.z );
+		internalCenterPrint->Print( wszHint );
+	}
+
+	if ( g_PortalVR.GetDigitalAny( VRACTION_JUMP ).bPressed )
+	{
+		SaveBeamPositions();
+		g_PortalVR.TriggerHaptic( GetGunHand(), 0.1f, 80.0f, 0.6f );
+		SetBeamEdit( false );
+		if ( internalCenterPrint )
+			internalCenterPrint->Print( (wchar_t *)L"Grab electricity saved" );
+	}
+	else if ( g_PortalVR.GetDigital( VRACTION_CROUCH, VR_HAND_RIGHT ).bPressed )
+	{
+		if ( m_nBeamEditTarget == 0 )
+		{
+			vr_gun_beam_end_x.Revert(); vr_gun_beam_end_y.Revert(); vr_gun_beam_end_z.Revert();
+		}
+		else
+		{
+			s_pBeamClawVars[m_nBeamEditTarget - 1]->Revert();
+		}
+	}
+}
+
+static void AddSegment( CMeshBuilder &meshBuilder, const Vector &a, const Vector &b, float flWidth, const unsigned char *color );
+
+// Editor markers: axes on the selected point, small white crosses on the others.
+void CClientVirtualReality::DrawBeamEditMarkers()
+{
+	if ( !m_bBeamPointsValid )
+		return;
+	for ( int i = 0; i < 4; i++ )
+	{
+		matrix3x4_t marker;
+		MatrixCopy( m_WorldFromGunModel, marker );
+		MatrixSetColumn( m_vecBeamPoint[i], 3, marker );
+		if ( i == m_nBeamEditTarget )
+		{
+			DrawAxes( marker, 2.5f );
+			continue;
+		}
+		static const unsigned char s_White[4] = { 255, 255, 255, 255 };
+		CMatRenderContextPtr pRenderContext( materials );
+		IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, m_pOverlayMaterial );
+		CMeshBuilder meshBuilder;
+		meshBuilder.Begin( pMesh, MATERIAL_QUADS, 3 );
+		for ( int a = 0; a < 3; a++ )
+		{
+			Vector vecAxis;
+			MatrixGetColumn( marker, a, vecAxis );
+			AddSegment( meshBuilder, m_vecBeamPoint[i] - vecAxis * 0.4f, m_vecBeamPoint[i] + vecAxis * 0.4f, 0.15f, s_White );
+		}
+		meshBuilder.End();
+		pMesh->Draw();
+	}
+}
+
 //-----------------------------------------------------------------------------
 // Calibration controls (both hands):
 //   free-hand grip (hold) - pick the gun model up with the free hand; let go to put it
@@ -761,6 +977,11 @@ void CClientVirtualReality::UpdateGunCalibration()
 // Its three claws are bones ("prong_top", "prong_left", "prong_right", pivots at
 // their bases); they are opened procedurally here after the normal bone setup.
 //-----------------------------------------------------------------------------
+CON_COMMAND( vr_gun_beam_edit, "Toggle the grab electricity editor (right grip = next point, left stick = forward/left, right stick = up, A saves, B resets)" )
+{
+	g_ClientVirtualReality.SetBeamEdit( !g_ClientVirtualReality.IsEditingBeams() );
+}
+
 ConVar vr_gun_anim( "vr_gun_anim", "1", FCVAR_ARCHIVE, "Animate the hand-held gun (claws, recoil) and make it glow in the portal colors." );
 
 static const char *s_pszProngBones[3] = { "prong_top", "prong_left", "prong_right" };
@@ -888,17 +1109,17 @@ void CClientVirtualReality::UpdateGunAnimation( C_BasePlayer *pPlayer, C_BaseAni
 		MatrixCopy( result, worldFromModel );
 	}
 
-	// Glow: the core / indicator lights (self-illum mask) and the glass tube.
+	// Glow: the indicator lights (self-illum mask) and the core in the glass tube.
 	const float flBright = 1.0f + 1.5f * flKick + 0.4f * m_flGunHoldBlend;
 	m_vecGunGlow = vecColor * flBright;
 	if ( !m_pGunMaterial )
 	{
 		m_pGunMaterial = materials->FindMaterial( "models/vr/portalgun_rtx/portalgun_rtx", TEXTURE_GROUP_MODEL, false );
-		m_pGunGlassMaterial = materials->FindMaterial( "models/vr/portalgun_rtx/portalgun_rtx_glass", TEXTURE_GROUP_MODEL, false );
+		m_pGunCoreMaterial = materials->FindMaterial( "models/vr/portalgun_rtx/portalgun_rtx_core", TEXTURE_GROUP_MODEL, false );
 		if ( m_pGunMaterial )
 			m_pGunMaterial->IncrementReferenceCount();
-		if ( m_pGunGlassMaterial )
-			m_pGunGlassMaterial->IncrementReferenceCount();
+		if ( m_pGunCoreMaterial )
+			m_pGunCoreMaterial->IncrementReferenceCount();
 	}
 	bool bFound;
 	if ( m_pGunMaterial )
@@ -907,11 +1128,12 @@ void CClientVirtualReality::UpdateGunAnimation( C_BasePlayer *pPlayer, C_BaseAni
 		if ( bFound )
 			pVar->SetVecValue( m_vecGunGlow.x * 1.6f, m_vecGunGlow.y * 1.6f, m_vecGunGlow.z * 1.6f );
 	}
-	if ( m_pGunGlassMaterial )
+	if ( m_pGunCoreMaterial )
 	{
-		IMaterialVar *pVar = m_pGunGlassMaterial->FindVar( "$color2", &bFound, false );
+		// The core inside the (clear) glass tube glows in the portal color, as bright as it goes.
+		IMaterialVar *pVar = m_pGunCoreMaterial->FindVar( "$color2", &bFound, false );
 		if ( bFound )
-			pVar->SetVecValue( m_vecGunGlow.x * 0.8f, m_vecGunGlow.y * 0.8f, m_vecGunGlow.z * 0.8f );
+			pVar->SetVecValue( m_vecGunGlow.x * 2.0f, m_vecGunGlow.y * 2.0f, m_vecGunGlow.z * 2.0f );
 	}
 }
 
@@ -923,8 +1145,9 @@ void CClientVirtualReality::DrawGunGlow()
 		return;
 
 	Vector vecCore;
-	VectorTransform( Vector( 12.0f, 0.0f, 0.0f ) * vr_gun_scale.GetFloat(), m_WorldFromGunModel, vecCore );
-	const float flSize = 2.2f * vr_gun_scale.GetFloat() * ( 1.0f + 0.6f * ( m_vecGunGlow.Length() - 1.0f ) );
+	const Vector vecGlow( vr_gun_glow_x.GetFloat(), vr_gun_glow_y.GetFloat(), vr_gun_glow_z.GetFloat() );
+	VectorTransform( vecGlow * vr_gun_scale.GetFloat(), m_WorldFromGunModel, vecCore );
+	const float flSize = vr_gun_glow_size.GetFloat() * vr_gun_scale.GetFloat() * ( 1.0f + 0.6f * ( m_vecGunGlow.Length() - 1.0f ) );
 	Vector vecToEye = CurrentViewOrigin() - vecCore;
 	VectorNormalize( vecToEye );
 	Vector vecRight = CrossProduct( vecToEye, Vector( 0, 0, 1 ) );
@@ -946,6 +1169,105 @@ void CClientVirtualReality::DrawGunGlow()
 	meshBuilder.Position3fv( ( vecCore + vecRight - vecUp ).Base() ); meshBuilder.Color4ubv( color ); meshBuilder.TexCoord2f( 0, 1, 1 ); meshBuilder.AdvanceVertex();
 	meshBuilder.End();
 	pMesh->Draw();
+}
+
+//-----------------------------------------------------------------------------
+// Grab electricity: the three beams from the claws to the front of the barrel that the
+// portal gun shows while holding an object (the stock ones hang off the hidden view model).
+//-----------------------------------------------------------------------------
+void CClientVirtualReality::FreeGunBeams()
+{
+	for ( int i = 0; i < 3; i++ )
+	{
+		// Let the beam system retire it (like CPortalgunEffectBeam::Release). FreeBeam would put
+		// it on the free list while it is still in the active list, and ClearBeams at the
+		// level change would delete it twice (crash on death / map change).
+		if ( m_pGunBeam[i] )
+		{
+			m_pGunBeam[i]->flags = 0;
+			m_pGunBeam[i]->die = gpGlobals->curtime - 1.0f;
+			m_pGunBeam[i]->brightness = 0.0f;
+		}
+		m_pGunBeam[i] = NULL;
+	}
+}
+
+void CClientVirtualReality::UpdateGunBeams( C_BaseAnimating *pGunEntity, const matrix3x4_t &worldFromModel )
+{
+	C_VRGunModel *pGun = dynamic_cast<C_VRGunModel *>( pGunEntity );
+	const bool bOn = pGun && ( m_bBeamEdit || ( vr_gun_anim.GetBool() && m_flGunHoldBlend > 0.01f ) );
+	const float flBrightness = m_bBeamEdit ? 128.0f : 128.0f * m_flGunHoldBlend;
+	CStudioHdr *pHdr = pGun ? pGun->GetModelPtr() : NULL;
+	const float flScale = vr_gun_scale.GetFloat();
+
+	Vector vecEnd;
+	VectorTransform( Vector( vr_gun_beam_end_x.GetFloat(), vr_gun_beam_end_y.GetFloat(), vr_gun_beam_end_z.GetFloat() ) * flScale, worldFromModel, vecEnd );
+
+	m_vecBeamPoint[0] = vecEnd;
+	m_bBeamPointsValid = false;
+	for ( int i = 0; i < 3; i++ )
+	{
+		const int nBone = pGun ? pGun->LookupBone( s_pszProngBones[i] ) : -1;
+		if ( !bOn || !pHdr || nBone < 0 )
+		{
+			if ( m_pGunBeam[i] )
+				m_pGunBeam[i]->brightness = 0.0f;
+			continue;
+		}
+
+		// Start point on the claw, in model space, swung open with the claw like the bone is.
+		// Bone positions are stored in studiomdl's frame, turned 90 degrees about Z from model
+		// space (see build_gun_model.py, pre_rot): model = ( -y, x, z ).
+		const Vector &vecBonePos = pHdr->pBone( nBone )->pos;
+		const Vector vecHinge( -vecBonePos.y, vecBonePos.x, vecBonePos.z );
+		Vector vecLocal = GetVectorCvar( *s_pBeamClawVars[i] );
+		if ( pGun->m_flProngAngle[i] != 0.0f )
+		{
+			Vector vecAxis = CrossProduct( Vector( 1, 0, 0 ), s_vecProngRadial[i] );
+			VectorNormalize( vecAxis );
+			matrix3x4_t rot;
+			MatrixBuildRotationAboutAxis( vecAxis, pGun->m_flProngAngle[i], rot );
+			Vector vecRotated;
+			VectorRotate( vecLocal, rot, vecRotated );
+			vecLocal = vecRotated;
+		}
+		Vector vecStart;
+		VectorTransform( ( vecHinge + vecLocal ) * flScale, worldFromModel, vecStart );
+		m_vecBeamPoint[i + 1] = vecStart;
+		m_bBeamPointsValid = true;
+
+		BeamInfo_t info;
+		info.m_nType = TE_BEAMPOINTS;
+		info.m_vecStart = vecStart;
+		info.m_vecEnd = vecEnd;
+		info.m_pszModelName = "sprites/grav_beam.vmt";	// PORTALGUN_BEAM_SPRITE
+		info.m_flHaloScale = 0.0f;
+		info.m_flLife = 0.0f;
+		info.m_flWidth = 0.0f;
+		info.m_flEndWidth = 2.0f * flScale;
+		info.m_flFadeLength = 0.0f;
+		info.m_flAmplitude = 16.0f;
+		info.m_flBrightness = flBrightness;
+		info.m_flSpeed = 150.0f;
+		info.m_nStartFrame = 0;
+		info.m_flFrameRate = 30.0f;
+		info.m_flRed = 255.0f;
+		info.m_flGreen = 255.0f;
+		info.m_flBlue = 255.0f;
+		info.m_nSegments = 8;
+		info.m_bRenderable = true;
+		info.m_nFlags = FBEAM_FOREVER;
+		if ( !m_pGunBeam[i] )
+			m_pGunBeam[i] = beams->CreateBeamPoints( info );
+		else
+			beams->UpdateBeamInfo( m_pGunBeam[i], info );
+		if ( m_pGunBeam[i] )
+		{
+			m_pGunBeam[i]->brightness = flBrightness;
+			m_pGunBeam[i]->m_bDrawInMainRender = true;
+			m_pGunBeam[i]->m_bDrawInPortalRender = true;
+		}
+	}
 }
 
 C_BaseEntity *CClientVirtualReality::GetGunModelEntity() const
@@ -990,6 +1312,7 @@ void CClientVirtualReality::UpdateGunModel( C_BasePlayer *pPlayer )
 	if ( !bShow )
 	{
 		pGun->AddEffects( EF_NODRAW );
+		UpdateGunBeams( NULL, m_WorldFromGunModel );
 		return;
 	}
 	pGun->RemoveEffects( EF_NODRAW );
@@ -997,6 +1320,7 @@ void CClientVirtualReality::UpdateGunModel( C_BasePlayer *pPlayer )
 	matrix3x4_t worldFromModel;
 	MatrixCopy( m_WorldFromGunModel, worldFromModel );
 	UpdateGunAnimation( pPlayer, pGun, worldFromModel );	// may add recoil to the drawn pose
+	UpdateGunBeams( pGun, worldFromModel );
 
 	Vector vecOrigin;
 	QAngle angles;
@@ -1040,11 +1364,13 @@ bool CClientVirtualReality::ProcessCurrentTrackingState( float fGameFOV )
 		}
 	}
 
+	UpdateSmoothTurn( pPlayer );
 	UpdateWorldPoses( pPlayer );
 	if ( !( vr_dbg_skip.GetInt() & 8 ) )
 		UpdateMenu();
 	if ( !( vr_dbg_skip.GetInt() & 1 ) )
 		UpdateGunCalibration();
+	UpdateBeamEdit();
 	UpdateGunTransform();
 	if ( !( vr_dbg_skip.GetInt() & 2 ) )
 		UpdateGunModel( pPlayer );
@@ -1123,19 +1449,20 @@ bool CClientVirtualReality::OverrideStereoView( CViewSetup *pViewMiddle, CViewSe
 	// HUD panel: body-locked in yaw, re-centers lazily when you look away from it.
 	// Menus stay where they opened, at eye level.
 	m_vecHudViewer = pViewMiddle->origin;
-	if ( !m_bMenuOpen )
+	const bool bScreen = m_bMenuOpen || m_bCreditsShown;
+	if ( !bScreen )
 	{
 		float flYawDelta = AngleDiff( pViewMiddle->angles[YAW], m_flHudYaw );
 		if ( fabsf( flYawDelta ) > vr_hud_follow_angle.GetFloat() )
 			m_flHudYaw = AngleNormalize( m_flHudYaw + flYawDelta - ( flYawDelta > 0.0f ? 1.0f : -1.0f ) * vr_hud_follow_angle.GetFloat() * 0.5f );
 	}
 
-	QAngle angHud( m_bMenuOpen ? 0.0f : vr_hud_pitch.GetFloat(), m_flHudYaw, 0.0f );
+	QAngle angHud( bScreen ? 0.0f : vr_hud_pitch.GetFloat(), m_flHudYaw, 0.0f );
 	m_WorldFromHud.SetupMatrixOrgAngles( vec3_origin, angHud );
 
 	int nScreenWide, nScreenTall;
 	vgui::surface()->GetScreenSize( nScreenWide, nScreenTall );
-	m_fHudHalfWidth = ( m_bMenuOpen ? vr_menu_width.GetFloat() : vr_hud_width.GetFloat() ) * 0.5f;
+	m_fHudHalfWidth = ( bScreen ? vr_menu_width.GetFloat() : vr_hud_width.GetFloat() ) * 0.5f;
 	m_fHudHalfHeight = m_fHudHalfWidth * (float)nScreenTall / (float)MAX( 1, nScreenWide );
 
 	// Projection used by HudTransform() to put world points onto the HUD panel.
@@ -1259,6 +1586,7 @@ void CClientVirtualReality::DrawMirror( int nWidth, int nHeight )
 
 void CClientVirtualReality::LevelShutdown()
 {
+	FreeGunBeams();	// before the engine clears all beams for the level change
 	if ( m_hGunModel.Get() )
 		m_hGunModel->Release();
 	m_hGunModel = NULL;
@@ -1273,7 +1601,7 @@ void CClientVirtualReality::LevelShutdown()
 //-----------------------------------------------------------------------------
 float CClientVirtualReality::GetHUDDistance()
 {
-	return m_bMenuOpen ? vr_menu_distance.GetFloat() : vr_hud_distance.GetFloat();
+	return ( m_bMenuOpen || m_bCreditsShown ) ? vr_menu_distance.GetFloat() : vr_hud_distance.GetFloat();
 }
 
 bool CClientVirtualReality::ShouldRenderHUDInWorld()
@@ -1297,7 +1625,7 @@ void CClientVirtualReality::GetHUDBounds( Vector *pViewer, Vector *pUL, Vector *
 void CClientVirtualReality::RenderHUDQuad( bool bBlackout, bool bTranslucent )
 {
 	bool bMenuOpen = g_pMatSystemSurface && g_pMatSystemSurface->IsCursorVisible();
-	if ( !vr_hud_visible.GetBool() && !bMenuOpen )
+	if ( !vr_hud_visible.GetBool() && !bMenuOpen && !m_bCreditsShown )
 		return;
 
 	CreateMaterials();
@@ -1306,7 +1634,13 @@ void CClientVirtualReality::RenderHUDQuad( bool bBlackout, bool bTranslucent )
 	GetHUDBounds( &vHead, &vUL, &vUR, &vLL, &vLR );
 
 	CMatRenderContextPtr pRenderContext( materials );
-	IMaterial *pMaterial = bMenuOpen ? m_pHudMaterialOpaque : m_pHudMaterial;
+	if ( m_bCreditsShown )
+	{
+		// Credits: nothing but the screen.
+		pRenderContext->ClearColor4ub( 0, 0, 0, 255 );
+		pRenderContext->ClearBuffers( true, true );
+	}
+	IMaterial *pMaterial = ( bMenuOpen || m_bCreditsShown ) ? m_pHudMaterialOpaque : m_pHudMaterial;
 	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, pMaterial );
 
 	CMeshBuilder meshBuilder;
@@ -1408,6 +1742,8 @@ void CClientVirtualReality::DrawWorldOverlays()
 		meshBuilder.End();
 		pMesh->Draw();
 	}
+	if ( m_bBeamEdit )
+		DrawBeamEditMarkers();
 
 	pRenderContext->MatrixMode( MATERIAL_MODEL );
 	pRenderContext->PopMatrix();
@@ -1575,6 +1911,16 @@ void CClientVirtualReality::UpdateMenu()
 	if ( g_PortalVR.GetDigitalAny( VRACTION_MENU ).bPressed )
 		engine->ClientCmd_Unrestricted( enginevgui->IsGameUIVisible() ? "gameui_hide" : "gameui_activate" );
 
+	// End credits: shown like the menu, on a screen straight ahead in a black void.
+#ifdef PORTAL
+	const bool bCredits = g_bPortalRollingCredits;
+#else
+	const bool bCredits = false;
+#endif
+	if ( bCredits && !m_bCreditsShown )
+		m_flHudYaw = m_angHead[YAW];
+	m_bCreditsShown = bCredits;
+
 	bool bMenuOpen = enginevgui->IsGameUIVisible() || ( g_pMatSystemSurface && g_pMatSystemSurface->IsCursorVisible() );
 	if ( bMenuOpen && !m_bMenuOpen )
 		m_flHudYaw = m_angHead[YAW];	// open the panel straight ahead
@@ -1713,7 +2059,7 @@ void CClientVirtualReality::CreateMove( float flFrametime, CUserCmd *cmd )
 	// Turning
 	//
 	Vector2D vecTurn = g_PortalVR.GetTurnStick();
-	if ( m_bCalibrating )
+	if ( m_bCalibrating || m_bBeamEdit )
 		vecTurn.Init();	// the right stick turns the aim while calibrating
 	if ( vr_turn_mode.GetInt() == 0 )
 	{
@@ -1730,10 +2076,7 @@ void CClientVirtualReality::CreateMove( float flFrametime, CUserCmd *cmd )
 			m_bSnapTurnReady = true;
 		}
 	}
-	else if ( fabsf( vecTurn.x ) > 0.15f && bAlive )
-	{
-		ApplyTurn( -vecTurn.x * vr_smooth_turn_speed.GetFloat() * flFrametime );
-	}
+	// Smooth turning: UpdateSmoothTurn, every rendered frame.
 
 	const bool bBothGrips = g_PortalVR.GetDigital( VRACTION_HAND_GRAB, VR_HAND_LEFT ).bDown && g_PortalVR.GetDigital( VRACTION_HAND_GRAB, VR_HAND_RIGHT ).bDown;
 	if ( g_PortalVR.GetDigitalAny( VRACTION_RECENTER ).bPressed && !bBothGrips )	// both grips + stick click = gun calibration
@@ -1799,7 +2142,7 @@ void CClientVirtualReality::CreateMove( float flFrametime, CUserCmd *cmd )
 	engine->SetViewAngles( m_angHead );
 
 	// Calibrating the gun: the controllers belong to the calibration, not the game.
-	if ( m_bCalibrating )
+	if ( m_bCalibrating || m_bBeamEdit )
 		return;
 
 	//

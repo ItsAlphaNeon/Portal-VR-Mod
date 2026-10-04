@@ -676,10 +676,12 @@ void C_WeaponPortalgun::DoEffectHolding( void )
 	}
 
 	// Set beams them visible
+	// Portal VR: not the view model ones; CClientVirtualReality draws them on the hand-held gun.
+	const bool bVRLocal = UseVR() && IsCarriedByLocalPlayer();
 	for ( i = 0; i < NUM_PORTALGUN_BEAMS / 2; ++i )
 	{
 		m_Beams[i].SetVisible3rdPerson( false );
-		m_Beams[i].SetVisibleViewModel();
+		m_Beams[i].SetVisibleViewModel( !bVRLocal );
 		m_Beams[i].SetBrightness( 128.0f );
 	}
 

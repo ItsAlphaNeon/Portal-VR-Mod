@@ -45,7 +45,7 @@ def dir_to_source(n):
 me.calc_loop_triangles()
 uv = me.uv_layers.active.data
 normals = me.corner_normals
-mat_names = ["portalgun_rtx", "portalgun_rtx_glass"]
+mat_names = ["portalgun_rtx", "portalgun_rtx_glass", "portalgun_rtx_core"]
 
 # ----------------------------------------------------------------------------- prong rig
 # The three claws at the front are separate mesh parts arranged around the barrel: top,
@@ -91,6 +91,37 @@ for i, (name, _) in enumerate(PRONGS):
     pivots.append(piv)
     print("PRONG %s verts %d pivot %.2f %.2f %.2f tip x %.2f" % (name, len(p), piv[0], piv[1], piv[2], p[:, 0].max()))
 
+# ----------------------------------------------------------------------------- core
+# The glass tube (material slot 1) is clear; the thin rod running inside it (a body piece,
+# slot 0) is the core, which gets its own material that the game tints with the portal
+# color (portalgun_rtx_core, $color2). Tube = the glass piece longest along the barrel;
+# core = body pieces inside the tube's cross-section that run at least half its length.
+vert_slot = np.zeros(len(verts), dtype=int)
+for poly in me.polygons:
+    for vi in poly.vertices:
+        vert_slot[vi] = poly.material_index
+tube = None
+for c in np.unique(comp[vert_slot == 1]):
+    p = src_verts[comp == c]
+    span = p[:, 0].max() - p[:, 0].min()
+    if tube is None or span > tube[0]:
+        tube = (span, p.min(0), p.max(0))
+if tube is None:
+    raise SystemExit("glass tube not found")
+_, tlo, thi = tube
+vert_core = np.zeros(len(verts), dtype=bool)
+for c in np.unique(comp[vert_slot == 0]):
+    sel = comp == c
+    p = src_verts[sel]
+    if (p[:, 1].min() > tlo[1] and p[:, 1].max() < thi[1] and p[:, 2].min() > tlo[2] and p[:, 2].max() < thi[2]
+            and p[:, 0].min() > tlo[0] - 0.5 and p[:, 0].max() < thi[0] + 1.0
+            and p[:, 0].max() - p[:, 0].min() > 0.5 * (thi[0] - tlo[0])):
+        vert_core[sel] = True
+if not vert_core.any():
+    raise SystemExit("core not found")
+cc = src_verts[vert_core].mean(0)
+print("CORE verts %d center %.2f %.2f %.2f (vr_gun_glow_x/y/z defaults)" % (vert_core.sum(), cc[0], cc[1], cc[2]))
+
 def pre_rot(p):
     # studiomdl turns SMD geometry 90 degrees about Z ((x, y) -> (-y, x)); undo that here.
     return (p[1], -p[0], p[2])
@@ -104,7 +135,10 @@ for i, piv in enumerate(pivots):
     lines.append("%d %.5f %.5f %.5f 0 0 0" % (i + 1, q[0], q[1], q[2]))
 lines += ["end", "triangles"]
 for tri in me.loop_triangles:
-    lines.append(mat_names[min(tri.material_index, 1)])
+    if tri.material_index == 0 and all(vert_core[me.loops[li].vertex_index] for li in tri.loops):
+        lines.append(mat_names[2])
+    else:
+        lines.append(mat_names[min(tri.material_index, 1)])
     for li in tri.loops:
         vi = me.loops[li].vertex_index
         p = pre_rot(to_source(me.vertices[vi].co))
@@ -175,6 +209,8 @@ del normal
 glass = np.zeros((64, 64, 4), np.float32)
 glass[...] = (0.45, 0.45, 0.45, 1.0)
 write_vtf(os.path.join(MAT_DIR, "glass.vtf"), glass, TEXTUREFLAGS_EIGHTBITALPHA)
+core = np.ones((64, 64, 4), np.float32)
+write_vtf(os.path.join(MAT_DIR, "core.vtf"), core, TEXTUREFLAGS_EIGHTBITALPHA)
 
 with open(os.path.join(MAT_DIR, "portalgun_rtx.vmt"), "w") as f:
     f.write('''"VertexLitGeneric"
@@ -192,14 +228,26 @@ with open(os.path.join(MAT_DIR, "portalgun_rtx.vmt"), "w") as f:
 	"$envmaptint"	"[0.06 0.06 0.06]"
 }
 ''')
-# The glass tube glows in the color of the last portal (the game sets $color2 every frame).
+# Clear glass tube: a faint additive sheen plus cubemap reflections, no tint.
 with open(os.path.join(MAT_DIR, "portalgun_rtx_glass.vmt"), "w") as f:
     f.write('''"UnlitGeneric"
 {
 	"$basetexture"	"models/vr/portalgun_rtx/glass"
 	"$additive"		"1"
 	"$nocull"		"1"
-	"$color2"		"[0.4 0.6 0.9]"
+	"$color2"		"[0.08 0.08 0.08]"
+	"$envmap"		"env_cubemap"
+	"$envmaptint"	"[0.25 0.25 0.25]"
+}
+''')
+# The core inside the tube: fully emissive, in the color of the last portal (the game sets
+# $color2 every frame; keep the key so FindVar finds it).
+with open(os.path.join(MAT_DIR, "portalgun_rtx_core.vmt"), "w") as f:
+    f.write('''"UnlitGeneric"
+{
+	"$basetexture"	"models/vr/portalgun_rtx/core"
+	"$color2"		"[0.25 0.6 1]"
+	"$model"		"1"
 }
 ''')
 print("DONE")

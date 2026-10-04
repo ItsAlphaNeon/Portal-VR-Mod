@@ -44,7 +44,7 @@
 					}
 				},
 				{
-					"path": "/user/hand/left/input/trackpad",
+					"path": "/user/hand/right/input/b",
 					"mode": "button",
 					"inputs": {
 						"click": {
@@ -53,7 +53,7 @@
 					}
 				},
 				{
-					"path": "/user/hand/right/input/trackpad",
+					"path": "/user/hand/left/input/y",
 					"mode": "button",
 					"inputs": {
 						"click": {
@@ -63,17 +63,11 @@
 				},
 				{
 					"path": "/user/hand/left/input/grip",
-					"mode": "grab",
-					"inputs": {
-						"grab": {
-							"output": "/actions/portal/in/HandGrab"
-						}
-					}
-				},
-				{
-					"path": "/user/hand/left/input/grip",
 					"mode": "trigger",
 					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/HandGrab"
+						},
 						"pull": {
 							"output": "/actions/portal/in/GripSqueeze"
 						}
@@ -81,19 +75,10 @@
 				},
 				{
 					"path": "/user/hand/left/input/grip",
-					"mode": "grab",
+					"mode": "trigger",
 					"inputs": {
-						"grab": {
+						"click": {
 							"output": "/actions/portal/in/GunGrab"
-						}
-					}
-				},
-				{
-					"path": "/user/hand/right/input/grip",
-					"mode": "grab",
-					"inputs": {
-						"grab": {
-							"output": "/actions/portal/in/HandGrab"
 						}
 					}
 				},
@@ -101,6 +86,9 @@
 					"path": "/user/hand/right/input/grip",
 					"mode": "trigger",
 					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/HandGrab"
+						},
 						"pull": {
 							"output": "/actions/portal/in/GripSqueeze"
 						}
@@ -108,15 +96,15 @@
 				},
 				{
 					"path": "/user/hand/right/input/grip",
-					"mode": "grab",
+					"mode": "trigger",
 					"inputs": {
-						"grab": {
+						"click": {
 							"output": "/actions/portal/in/GunGrab"
 						}
 					}
 				},
 				{
-					"path": "/user/hand/left/input/thumbstick",
+					"path": "/user/hand/left/input/joystick",
 					"mode": "joystick",
 					"inputs": {
 						"position": {
@@ -125,7 +113,7 @@
 					}
 				},
 				{
-					"path": "/user/hand/right/input/thumbstick",
+					"path": "/user/hand/right/input/joystick",
 					"mode": "joystick",
 					"inputs": {
 						"position": {
@@ -134,7 +122,16 @@
 					}
 				},
 				{
-					"path": "/user/hand/right/input/thumbstick",
+					"path": "/user/hand/right/input/joystick",
+					"mode": "button",
+					"inputs": {
+						"click": {
+							"output": "/actions/portal/in/Crouch"
+						}
+					}
+				},
+				{
+					"path": "/user/hand/left/input/joystick",
 					"mode": "button",
 					"inputs": {
 						"click": {
@@ -152,25 +149,16 @@
 					}
 				},
 				{
-					"path": "/user/hand/right/input/b",
+					"path": "/user/hand/left/input/x",
 					"mode": "button",
 					"inputs": {
 						"click": {
-							"output": "/actions/portal/in/Crouch"
+							"output": "/actions/portal/in/ToggleHUD"
 						}
 					}
 				},
 				{
-					"path": "/user/hand/left/input/a",
-					"mode": "button",
-					"inputs": {
-						"click": {
-							"output": "/actions/portal/in/Jump"
-						}
-					}
-				},
-				{
-					"path": "/user/hand/left/input/b",
+					"path": "/user/hand/left/input/application_menu",
 					"mode": "button",
 					"inputs": {
 						"click": {
@@ -192,9 +180,9 @@
 		}
 	},
 	"category": "steamvr_input",
-	"controller_type": "knuckles",
-	"description": "Portal VR default: trigger = blue, trackpad click = orange, grip = pick up, A = jump, B = crouch, left B = menu; left stick = move, right stick = turn",
-	"name": "Portal VR Default (Valve Index)",
+	"controller_type": "hpmotioncontroller",
+	"description": "Portal VR default: trigger = blue, B = orange, grip = pick up, A = jump, right stick click = crouch; left stick = move, right stick = turn",
+	"name": "Portal VR Default (HP Reverb G2)",
 	"options": {},
 	"simulated_actions": []
 }

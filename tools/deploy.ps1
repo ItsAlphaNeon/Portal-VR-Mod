@@ -5,8 +5,12 @@
 # file is modified; deleting the junction removes the mod.
 
 param(
-	[string]$PortalDir = 'C:\Program Files (x86)\Steam\steamapps\common\Portal'
+	[string]$PortalDir = ''	# default: found through Steam (findportal.ps1)
 )
+
+. (Join-Path $PSScriptRoot 'findportal.ps1')
+if (-not $PortalDir) { $PortalDir = Find-PortalDir }
+if (-not $PortalDir) { throw 'Portal not found; pass -PortalDir' }
 
 $ErrorActionPreference = 'Stop'
 $repo = Resolve-Path (Join-Path $PSScriptRoot '..')

@@ -10,7 +10,7 @@ $here = $PSScriptRoot
 $out = Join-Path $here "build"
 $game = Join-Path $here "..\..\sp\game\portalvr" | Resolve-Path
 
-& $Blender -b --factory-startup $Blend --python (Join-Path $here "build_gun_model.py") -- $Textures $out | Select-String "BBOX|MUZZLE|TRIS|PRONG|DONE|Error"
+& $Blender -b --factory-startup $Blend --python (Join-Path $here "build_gun_model.py") -- $Textures $out | Select-String "BBOX|MUZZLE|TRIS|PRONG|CORE|DONE|Error"
 Copy-Item -Recurse -Force (Join-Path $out "materials\*") (Join-Path $game "materials")
 Push-Location $out
 & "$Portal\bin\studiomdl.exe" -nop4 -game "$game" portalgun_rtx.qc | Select-Object -Last 2

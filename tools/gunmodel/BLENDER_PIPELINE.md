@@ -38,7 +38,7 @@ The `.blend` has a single mesh object named **`PortalGun`**. It uses two materia
    - `-b` runs Blender headless.
    - `--factory-startup` ignores user prefs and add-ons, so runs are reproducible.
    - Everything after `--` is the script's own arguments, read from `sys.argv[sys.argv.index("--")+1:]`.
-   - The script's log lines are filtered to `BBOX|MUZZLE|TRIS|PRONG|DONE|Error`, so those are the only ones you see.
+   - The script's log lines are filtered to `BBOX|MUZZLE|TRIS|PRONG|CORE|DONE|Error`, so those are the only ones you see.
 2. Copies `build/materials/*` into `sp/game/portalvr/materials`.
 3. Runs `studiomdl.exe -nop4 -game sp/game/portalvr portalgun_rtx.qc` from `build/`. The `.mdl/.vvd/.vtx` files go to `sp/game/portalvr/models/vr/`.
 
@@ -46,6 +46,7 @@ The `.blend` has a single mesh object named **`PortalGun`**. It uses two materia
 
 **Check the output:**
 - `PRONG <name> verts N pivot x y z tip x`: three lines, one per claw, each with a sensible vertex count. If a claw isn't found, the script exits with `prong X not found`.
+- `CORE verts N center x y z`: the core rod inside the glass tube (§3.2b). If it's missing, the script exits with `core not found`. The center is the natural default for `vr_gun_glow_x/y/z`.
 - `BBOX`: the model's bounding box in game units. Source X is barrel forward.
 - `MUZZLE x 0 0`: the barrel tip. **If this changes, update `s_vecGunMuzzleInModel` in `sp/src/game/client/client_virtualreality.cpp:91`** (currently `16.94`).
 - `TRIS`, then `DONE`.
@@ -87,6 +88,14 @@ The game animates three claws (they open while holding an object and flick open 
 
 The client finds the bones **by name**, in `C_VRGunModel` in `client_virtualreality.cpp` (around line 760). It overrides `BuildTransformations` and rotates each claw bone about its hinge. Bone names are part of that contract; if you rename them, change `s_pszProngBones` in the client too.
 
+### 3.2b Glass tube and core
+The glass tube is material slot 1; the thin rod inside it is part of the body (slot 0) in the asset. The script moves that rod to a third material, `portalgun_rtx_core`, which the game tints with the portal colour:
+- **Tube:** the slot-1 piece with the longest extent along the barrel.
+- **Core:** slot-0 pieces whose cross-section (Y/Z) lies inside the tube's and which run at least half the tube's length (X within the tube, −0.5/+1.0 units of slack).
+- Triangles with all three vertices on the core are written with `portalgun_rtx_core`.
+
+The glass stays clear (no tint).
+
 ### 3.3 The studiomdl 90° gotcha
 studiomdl rotates SMD geometry 90° about Z on import: `(x, y) → (−y, x)`. Left as is, the barrel points along +Y in game.
 
@@ -126,15 +135,17 @@ Channel packing (Source's VertexLitGeneric conventions):
 | `albedo.vtf` | albedo | **self-illum mask** = max(emissive RGB) |
 | `normal.vtf` | normal (OpenGL-style "OTH" normal from the asset, used as is) | **phong/envmap mask** = 0.05 + 0.35·metal + 0.25·(1−rough) |
 | `glass.vtf` | flat 0.45 grey, 64² | 1 |
+| `core.vtf` | flat white, 64² | 1 |
 
 ### 3.6 Materials (VMT)
 - **`portalgun_rtx.vmt`** (`VertexLitGeneric`):
   - `$selfillum 1` with **`$selfillumtint`**
   - phong: exponent 12, boost 0.6
   - `env_cubemap` with `$normalmapalphaenvmapmask` and a dim `$envmaptint 0.06`. It was turned down because the user said the gun was too shiny.
-- **`portalgun_rtx_glass.vmt`** (`UnlitGeneric`): `$additive`, `$nocull`, **`$color2`**.
+- **`portalgun_rtx_glass.vmt`** (`UnlitGeneric`): clear glass. `$additive`, `$nocull`, a dim fixed `$color2` and a faint `env_cubemap` reflection.
+- **`portalgun_rtx_core.vmt`** (`UnlitGeneric`): the core, fully emissive, with **`$color2`**.
 
-The game writes `$selfillumtint` and `$color2` every frame with the last portal's colour (`UpdateGunAnimation`, `client_virtualreality.cpp` around line 900). It uses `FindVar`, which only finds variables **present in the VMT**. Keep those keys if you rewrite the materials, and keep the material paths, which are hard-coded in `FindMaterial`.
+The game writes `$selfillumtint` (body) and the core's `$color2` every frame with the last portal's colour (`UpdateGunAnimation`, `client_virtualreality.cpp` around line 900). It uses `FindVar`, which only finds variables **present in the VMT**. Keep those keys if you rewrite the materials, and keep the material paths, which are hard-coded in `FindMaterial`.
 
 ## 4. Recipes
 
@@ -148,4 +159,5 @@ The game writes `$selfillumtint` and `$color2` every frame with the last portal'
 1. `build.ps1` shows three `PRONG` lines, `MUZZLE`, `DONE`, and studiomdl reports no errors.
 2. The muzzle constant in the client matches `MUZZLE`, and the client is rebuilt if it changed.
 3. The gun looks right in an image dump or in the headset: it sits in the hand, the claws hinge correctly, and the glow changes colour on fire.
-4. Commit `tools/gunmodel/*`, `sp/game/portalvr/models/vr/*` and `sp/game/portalvr/materials/models/vr/portalgun_rtx/*`.
+4. The glow sprite (`vr_gun_glow_x/y/z/size`) still sits in the core, and the grab electricity (`vr_gun_beam_*`, VR Settings → Edit grab electricity) still starts on the claws. Both are in model space, so moving the origin or rescaling breaks them.
+5. Commit `tools/gunmodel/*`, `sp/game/portalvr/models/vr/*` and `sp/game/portalvr/materials/models/vr/portalgun_rtx/*`.
