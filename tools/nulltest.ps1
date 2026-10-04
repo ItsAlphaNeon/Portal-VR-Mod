@@ -30,8 +30,14 @@ try {
 finally {
 	Stop-Process -Name hl2 -Force -ErrorAction SilentlyContinue
 	Start-Sleep 2
-	Get-Process | Where-Object { $_.Name -match '^vr|steamvr_room' } | Stop-Process -Force -ErrorAction SilentlyContinue
-	Start-Sleep 3
+	# SteamVR can respawn its processes for a moment; keep stopping them until they stay gone,
+	# otherwise nullhmd off refuses and the null headset stays switched on.
+	for ($i = 0; $i -lt 15; $i++) {
+		$vr = Get-Process | Where-Object { $_.Name -match '^vr|steamvr_room' }
+		if (-not $vr) { break }
+		$vr | Stop-Process -Force -ErrorAction SilentlyContinue
+		Start-Sleep 2
+	}
 	& "$PSScriptRoot\nullhmd.ps1" off | Select-Object -Last 1
 }
 if (Test-Path "$g\vr_crash.txt") { Get-Content "$g\vr_crash.txt" }

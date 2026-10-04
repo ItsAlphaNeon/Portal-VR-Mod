@@ -1072,6 +1072,10 @@ void CViewRender::Render( vrect_t *rect )
     // Set for console commands, etc.
     render->SetMainView ( m_View.origin, m_View.angles );
 
+	// Portal VR: the title screen's flat view for the menu screen, once per frame.
+	if ( UseVR() )
+		DrawVRTitleScene();
+
     for( StereoEye_t eEye = GetFirstEye(); eEye <= GetLastEye(); eEye = (StereoEye_t)(eEye+1) )
 	{
 		CViewSetup &view = GetView( eEye );

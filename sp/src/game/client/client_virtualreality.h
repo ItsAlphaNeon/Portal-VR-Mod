@@ -165,6 +165,9 @@ public:
 	// The hand-held gun entity while it is shown (NULL otherwise). Portals ghost it.
 	C_BaseEntity *GetGunModelEntity() const;
 
+	// Title screen: the background map's camera, rendered flat onto the menu screen.
+	bool GetTitleCamera( CViewSetup &view ) const;
+
 private:
 	void UpdateWorldPoses( C_BasePlayer *pPlayer );
 	void TrackingToWorld( const matrix3x4_t &trk, const Vector &vecPlayerOrigin, matrix3x4_t &world ) const;
@@ -266,7 +269,13 @@ private:
 
 	// Menu pointer
 	bool			m_bMenuOpen;
-	bool			m_bCreditsShown;		// end credits on the menu screen, black around it
+	bool			m_bScreenOnly;			// only the menu screen in a black void: end credits, title screen
+	bool			m_bTitleScene;			// title screen: the screen shows the flat camera view under the menu
+	bool			m_bTitleCamValid;
+	Vector			m_vecTitleCamOrigin;
+	QAngle			m_angTitleCam;
+	float			m_flTitleCamFov;
+	IMaterial		*m_pTitleMaterial;
 	bool			m_bPointerHit;
 	Vector			m_vecPointerStart;
 	Vector			m_vecPointerEnd;

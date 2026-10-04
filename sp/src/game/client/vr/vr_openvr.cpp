@@ -268,6 +268,15 @@ void CPortalVR::CreateRenderTargets( IMaterialSystem *pMaterialSystem )
 	if ( pGui )
 		pGui->IncrementReferenceCount();
 
+	// The title screen's flat (2D) view, shown on the menu screen (CViewRender::DrawVRTitleScene).
+	ITexture *pTitle = pMaterialSystem->CreateNamedRenderTargetTextureEx2(
+		"_rt_vr_title", 1, 1, RT_SIZE_FULL_FRAME_BUFFER,
+		IMAGE_FORMAT_BGRA8888, MATERIAL_RT_DEPTH_SEPARATE,
+		TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_NOLOD,
+		0 );
+	if ( pTitle )
+		pTitle->IncrementReferenceCount();
+
 	VRLog( "Render targets requested: eyes %dx%d", nTexWidth, nTexHeight );
 }
 

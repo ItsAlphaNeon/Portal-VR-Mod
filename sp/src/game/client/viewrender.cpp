@@ -3127,6 +3127,40 @@ bool CViewRender::DrawOneMonitor( ITexture *pRenderTarget, int cameraNum, C_Poin
 	return true;
 }
 
+//-----------------------------------------------------------------------------
+// Portal VR: on the title screen, VR shows only the menu screen in a black room. The
+// background map's flyby camera is rendered flat into _rt_vr_title (like a monitor) and
+// shown on that screen under the menu, as the desktop would show it.
+//-----------------------------------------------------------------------------
+void CViewRender::DrawVRTitleScene()
+{
+	CViewSetup cam;
+	if ( !g_ClientVirtualReality.GetTitleCamera( cam ) )
+		return;
+	ITexture *pTarget = materials->FindTexture( "_rt_vr_title", TEXTURE_GROUP_RENDER_TARGET, false );
+	if ( !pTarget || pTarget->IsError() )
+		return;
+
+	CViewSetup titleView = m_View;
+	titleView.x = 0;
+	titleView.y = 0;
+	titleView.width = pTarget->GetActualWidth();
+	titleView.height = pTarget->GetActualHeight();
+	titleView.origin = cam.origin;
+	titleView.angles = cam.angles;
+	titleView.fov = cam.fov;
+	titleView.zNear = 7.0f;
+	titleView.m_bOrtho = false;
+	titleView.m_flAspectRatio = (float)titleView.width / (float)MAX( 1, titleView.height );
+	titleView.m_bViewToProjectionOverride = false;
+	titleView.m_eStereoEye = STEREO_EYE_MONO;
+
+	Frustum frustum;
+	render->Push3DView( titleView, VIEW_CLEAR_DEPTH | VIEW_CLEAR_COLOR, pTarget, (VPlane *)frustum );
+	ViewDrawScene( false, SKYBOX_2DSKYBOX_VISIBLE, titleView, 0, VIEW_MONITOR );
+	render->PopView( frustum );
+}
+
 void CViewRender::DrawMonitors( const CViewSetup &cameraView )
 {
 #ifdef PORTAL

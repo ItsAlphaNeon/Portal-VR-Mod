@@ -59,6 +59,7 @@ BEGIN_DATADESC( CPortal_Player )
 
 END_DATADESC()
 
+static ConVar vr_grab_log( "vr_grab_log", "0", 0, "Log VR grab attempts and pickup refusals/drops to the console (debugging)." );
 ConVar sv_regeneration_wait_time ("sv_regeneration_wait_time", "1.0", FCVAR_REPLICATED );
 ConVar sv_regeneration_enable("sv_regeneration_enable", "0", FCVAR_REPLICATED | FCVAR_ARCHIVE);
 
@@ -892,11 +893,18 @@ void CPortal_Player::PlayerUse( void )
 	if ( ! ((m_nButtons | m_afButtonPressed | m_afButtonReleased) & IN_USE) )
 		return;
 
+	const bool bVRLog = m_nVRUseSource != VR_GRAB_NONE && vr_grab_log.GetBool();
+	if ( bVRLog )
+		Msg( "[VR grab] PlayerUse: pressed %d useentity %s suspended %.1f movetype %d\n", ( m_afButtonPressed & IN_USE ) != 0,
+			m_hUseEntity.Get() ? m_hUseEntity->GetClassname() : "-", m_flTimeUseSuspended - gpGlobals->curtime, GetMoveType() );
+
 	if ( m_afButtonPressed & IN_USE )
 	{
 		// Currently using a latched entity?
 		if ( ClearUseEntity() )
 		{
+			if ( bVRLog )
+				Msg( "[VR grab] PlayerUse: dropped / cleared the use entity\n" );
 			return;
 		}
 		else
@@ -1104,7 +1112,7 @@ bool CPortal_Player::GetVRAim( Vector &vecOrigin, Vector &vecDirection )
 // Everything goes through the stock +use pickup code; we only decide what gets
 // used, from where, and when.
 //-----------------------------------------------------------------------------
-ConVar vr_grab_radius( "vr_grab_radius", "10", FCVAR_REPLICATED, "How close (units) the hand must be to grab something." );
+ConVar vr_grab_radius( "vr_grab_radius", "14", FCVAR_REPLICATED, "How close (units) the hand must be to grab something." );
 ConVar vr_pull_distance( "vr_pull_distance", "96", FCVAR_REPLICATED, "How far (units) the free hand can point to pull an object." );
 ConVar vr_gun_grab_distance( "vr_gun_grab_distance", "128", FCVAR_REPLICATED, "How far (units) the gun can reach to pick something up." );
 ConVar vr_throw_max_speed( "vr_throw_max_speed", "450", FCVAR_REPLICATED, "Maximum speed (units/s) of a thrown object." );
@@ -1136,16 +1144,23 @@ void CPortal_Player::VRProcessGrabButtons( CUserCmd *ucmd )
 		return;
 	}
 
-	// Only the gun hand interacts: its grip is a +use press aimed along the gun. Press it to
-	// pick something up (it floats in front of the barrel) or press a button; press again to drop.
+	// Only the gun hand interacts: its grip is a +use press. Press it to pick something up or
+	// press a button; press again to drop.
+	//  - With the portal gun: aimed along the gun; the object floats in front of the barrel.
+	//  - Without it (the first chambers): the hand grabs what it touches or points at, and it
+	//    floats in front like with the gun, a bit closer (vr_hand_hold_scale). (The invisible
+	//    gun's muzzle is ~17 units past the hand, so aiming along it missed what the hand reached for.)
 	if ( !( nPressed & VRBTN_GUN_GRAB ) )
 		return;
 
 	ucmd->buttons |= IN_USE;
 	if ( !GetPlayerHeldEntity( this ) )
 	{
-		m_nVRUseSource = VR_GRAB_GUN;
-		m_nVRPendingGrabMode = VR_GRAB_GUN;
+		const int nMode = dynamic_cast<CWeaponPortalgun *>( GetActiveWeapon() ) ? VR_GRAB_GUN : VR_GRAB_HAND;
+		if ( vr_grab_log.GetBool() )
+			Msg( "[VR grab] press: %s (active weapon %s)\n", nMode == VR_GRAB_HAND ? "hand" : "gun", GetActiveWeapon() ? GetActiveWeapon()->GetClassname() : "none" );
+		m_nVRUseSource = nMode;
+		m_nVRPendingGrabMode = nMode;
 	}
 }
 
@@ -1172,6 +1187,11 @@ static bool VRIsUsable( CBaseEntity *pEntity )
 
 CBaseEntity *CPortal_Player::VRFindHandEntity( const Vector &vecHand, const Vector &vecDir )
 {
+	const bool bLog = vr_grab_log.GetBool();
+	if ( bLog )
+		Msg( "[VR grab] hand %.1f %.1f %.1f dir %.2f %.2f %.2f (player %.1f %.1f %.1f)\n", vecHand.x, vecHand.y, vecHand.z,
+			vecDir.x, vecDir.y, vecDir.z, GetAbsOrigin().x, GetAbsOrigin().y, GetAbsOrigin().z );
+
 	// 1) Touching: the closest usable thing within reach of the hand.
 	CBaseEntity *pList[64];
 	int nCount = UTIL_EntitiesInSphere( pList, ARRAYSIZE( pList ), vecHand, vr_grab_radius.GetFloat(), 0 );
@@ -1180,6 +1200,8 @@ CBaseEntity *CPortal_Player::VRFindHandEntity( const Vector &vecHand, const Vect
 	for ( int i = 0; i < nCount; i++ )
 	{
 		CBaseEntity *pEnt = pList[i];
+		if ( bLog && pEnt != this )
+			Msg( "[VR grab]   near: %s (%s) caps 0x%x usable %d\n", pEnt->GetClassname(), pEnt->GetDebugName(), pEnt->ObjectCaps(), VRIsUsable( pEnt ) );
 		if ( pEnt == this || !VRIsUsable( pEnt ) )
 			continue;
 		Vector vecNearest;
@@ -1197,6 +1219,17 @@ CBaseEntity *CPortal_Player::VRFindHandEntity( const Vector &vecHand, const Vect
 	// 2) Pointing: pull what the hand points at.
 	trace_t tr;
 	UTIL_TraceLine( vecHand, vecHand + vecDir * vr_pull_distance.GetFloat(), MASK_SOLID | CONTENTS_DEBRIS | CONTENTS_PLAYERCLIP, this, COLLISION_GROUP_NONE, &tr );
+	if ( bLog )
+		Msg( "[VR grab]   ray hit: %s (%s) frac %.2f usable %d\n", tr.m_pEnt ? tr.m_pEnt->GetClassname() : "-", tr.m_pEnt ? tr.m_pEnt->GetDebugName() : "-",
+			tr.fraction, tr.m_pEnt ? VRIsUsable( tr.m_pEnt ) : 0 );
+	if ( tr.m_pEnt && VRIsUsable( tr.m_pEnt ) )
+		return tr.m_pEnt;
+
+	// 3) A fatter sweep, so pointing roughly at a cube or button is enough.
+	const Vector vecHull( 6, 6, 6 );
+	UTIL_TraceHull( vecHand, vecHand + vecDir * vr_pull_distance.GetFloat(), -vecHull, vecHull, MASK_SOLID | CONTENTS_DEBRIS | CONTENTS_PLAYERCLIP, this, COLLISION_GROUP_NONE, &tr );
+	if ( bLog )
+		Msg( "[VR grab]   sweep hit: %s (%s) usable %d\n", tr.m_pEnt ? tr.m_pEnt->GetClassname() : "-", tr.m_pEnt ? tr.m_pEnt->GetDebugName() : "-", tr.m_pEnt ? VRIsUsable( tr.m_pEnt ) : 0 );
 	if ( tr.m_pEnt && VRIsUsable( tr.m_pEnt ) )
 		return tr.m_pEnt;
 	return NULL;
@@ -1225,12 +1258,19 @@ CBaseEntity *CPortal_Player::FindUseEntity( void )
 		return NULL;
 	}
 
+	// Hand grab (no portal gun): the gun hand.
 	matrix3x4_t hand;
-	if ( !GetVRHandMatrix( m_VRCmd.FreeHand(), hand ) )
+	if ( !GetVRHandMatrix( m_VRCmd.GunHand(), hand ) )
+	{
+		if ( vr_grab_log.GetBool() )
+			Msg( "[VR grab] gun hand not tracked\n" );
 		return NULL;
+	}
+	// Point with the calibrated aim (where the gun would point), not the raw grip axis: on
+	// some controllers (the Frame) the grip pose's forward is ~60 degrees off the pointing direction.
 	Vector vecHand, vecDir;
 	MatrixGetColumn( hand, 3, vecHand );
-	MatrixGetColumn( hand, 0, vecDir );
+	AngleVectors( m_VRCmd.aimAngles, &vecDir );
 	return VRFindHandEntity( vecHand, vecDir );
 }
 

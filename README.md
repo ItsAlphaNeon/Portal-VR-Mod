@@ -39,12 +39,13 @@ If you move or re-download the repository, just run `launch.bat` again; it re-li
   - Grab the gun model with your other hand, put it where it feels right, and turn the aim laser with the stick.
   - Without a saved calibration, the gun is placed from SteamVR's hand skeleton.
 - **Picking things up with the gun**: press the grip to pick up what the gun points at (or press a button), and press again to drop. Held objects float in front of the barrel like in the original game.
+- **Before you have the gun**, the grip picks up what your hand touches or points at; it floats in front of you the same way.
 - **Fizzlers can't be cheated.** Reaching through an emancipation grid and firing still fizzles the shot.
 - **Smooth jumps.** Source's automatic mid-air "duck-jump" no longer jolts the camera.
 - **Going through floor/ceiling portals**, two options:
   - **Instant** (default): you come out facing the right way and the horizon stays level.
   - **Original**: the view turns with the portal and then rolls back level, like the flat game.
-- **End credits** roll on the menu screen, in a black void.
+- **Title screen and end credits** on a screen in a black room: the title flyby is shown flat, like on a monitor, so the camera never moves your head.
 - **Menus in VR**
   - The pause and main menus appear on a panel in the world; you point the gun at them and the trigger clicks.
   - The HUD, subtitles and hints are on a panel that follows your gaze.

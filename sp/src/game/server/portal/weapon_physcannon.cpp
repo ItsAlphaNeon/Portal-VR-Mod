@@ -477,7 +477,6 @@ public:
 	void SetTargetPosition( const Vector &target, const QAngle &targetOrientation );
 	void GetTargetPosition( Vector *target, QAngle *targetOrientation );
 	float ComputeError();
-	bool			UpdateObjectVRHand( CPortal_Player *pPlayer, CBaseEntity *pEntity );	// Portal VR
 	float GetLoadWeight( void ) const { return m_flLoadWeight; }
 	void SetAngleAlignment( float alignAngleCosine ) { m_angleAlignment = alignAngleCosine; }
 	void SetIgnorePitch( bool bIgnore ) { m_bIgnoreRelativePitch = bIgnore; }
@@ -1130,8 +1129,12 @@ END_DATADESC()
 // Input  : *pPlayer - 
 //			*pObject - 
 //-----------------------------------------------------------------------------
+static ConVarRef s_vr_grab_log( "vr_grab_log" );
+#define VRGRABLOG( ... ) do { if ( s_vr_grab_log.IsValid() && s_vr_grab_log.GetBool() ) Msg( __VA_ARGS__ ); } while ( 0 )
+
 void CPlayerPickupController::Init( CBasePlayer *pPlayer, CBaseEntity *pObject )
 {
+	VRGRABLOG( "[VR grab] pickup controller: init on %s\n", pObject ? pObject->GetDebugName() : "-" );
 	// Holster player's weapon
 	if ( pPlayer->GetActiveWeapon() )
 	{
@@ -1266,6 +1269,8 @@ void CPlayerPickupController::Use( CBaseEntity *pActivator, CBaseEntity *pCaller
 		// UNDONE: Must fix case of forcing objects into the ground you're standing on (causes stress) before that will work
 		if ( !pAttached || useType == USE_OFF || ( !bVRHold && (m_pPlayer->m_nButtons & IN_ATTACK2) ) || m_grabController.ComputeError() > 12 )
 		{
+			VRGRABLOG( "[VR grab] pickup controller: let go (attached %d, use off %d, error %.1f, vr hold %d)\n", pAttached != NULL,
+				useType == USE_OFF, m_grabController.ComputeError(), bVRHold );
 			Shutdown();
 			return;
 		}
@@ -1274,6 +1279,7 @@ void CPlayerPickupController::Use( CBaseEntity *pActivator, CBaseEntity *pCaller
 		IPhysicsObject *pPhys = pAttached->VPhysicsGetObject();
 		if ( pPhys && pPhys->IsMoveable() == false )
 		{
+			VRGRABLOG( "[VR grab] pickup controller: let go (object not movable)\n" );
 			Shutdown();
 			return;
 		}
@@ -2878,59 +2884,7 @@ CBaseEntity *CWeaponPhysCannon::FindObjectInCone( const Vector &vecOrigin, const
 
 //-----------------------------------------------------------------------------
 //-----------------------------------------------------------------------------
-//-----------------------------------------------------------------------------
-// Portal VR: hold the object in the free hand, keeping the grip it was grabbed
-// with. Objects grabbed from a distance are pulled to the hand.
-//-----------------------------------------------------------------------------
-bool CGrabController::UpdateObjectVRHand( CPortal_Player *pPlayer, CBaseEntity *pEntity )
-{
-	matrix3x4_t worldFromHand;
-	if ( !pPlayer->GetVRHandMatrix( pPlayer->GetVRCmd().FreeHand(), worldFromHand ) )
-		return true; // hand lost tracking: keep the last target
-
-	const matrix3x4_t &worldFromObject = pEntity->EntityToWorldTransform();
-	if ( !pPlayer->m_bVRGrabOffsetValid )
-	{
-		matrix3x4_t handFromWorld;
-		MatrixInvert( worldFromHand, handFromWorld );
-		ConcatTransforms( handFromWorld, worldFromObject, pPlayer->m_matVRHandFromObject );
-
-		// Grabbed from a distance: keep the relative rotation but bring the object's center
-		// into the palm, slightly in front of the grip.
-		Vector vecCenterWorld = pEntity->WorldSpaceCenter();
-		Vector vecCenterInHand;
-		VectorTransform( vecCenterWorld, handFromWorld, vecCenterInHand );
-		const Vector vecPalm( 5.0f, 0.0f, 0.0f );
-		if ( vecCenterInHand.DistTo( vecPalm ) > 12.0f )
-		{
-			Vector vecShift = vecPalm - vecCenterInHand;
-			pPlayer->m_matVRHandFromObject[0][3] += vecShift.x;
-			pPlayer->m_matVRHandFromObject[1][3] += vecShift.y;
-			pPlayer->m_matVRHandFromObject[2][3] += vecShift.z;
-		}
-		pPlayer->m_bVRGrabOffsetValid = true;
-	}
-
-	matrix3x4_t worldFromTarget;
-	ConcatTransforms( worldFromHand, pPlayer->m_matVRHandFromObject, worldFromTarget );
-	Vector vecTarget;
-	QAngle angTarget;
-	MatrixGetColumn( worldFromTarget, 3, vecTarget );
-	MatrixAngles( worldFromTarget, angTarget );
-
-	// Pull: move the target toward the hand gradually so the controller doesn't treat the
-	// distance as an obstruction and drop the object.
-	Vector vecCurrent = pEntity->GetAbsOrigin();
-	Vector vecToTarget = vecTarget - vecCurrent;
-	const float flMaxLead = 8.0f;
-	float flDist = vecToTarget.Length();
-	if ( flDist > flMaxLead )
-		vecTarget = vecCurrent + vecToTarget * ( flMaxLead / flDist );
-
-	SetTargetPosition( vecTarget, angTarget );
-	pPlayer->SetHeldObjectPortal( NULL );
-	return true;
-}
+ConVar vr_hand_hold_scale( "vr_hand_hold_scale", "0.8", FCVAR_REPLICATED, "Hold distance of objects picked up without the portal gun, relative to the gun's." );
 
 bool CGrabController::UpdateObject( CBasePlayer *pPlayer, float flError )
 {
@@ -2958,18 +2912,15 @@ bool CGrabController::UpdateObject( CBasePlayer *pPlayer, float flError )
 		return false;
 	}
 
-	// Portal VR: objects held in the free hand follow the hand.
-	CPortal_Player *pVRPlayer = ToPortalPlayer( pPlayer );
-	if ( pVRPlayer && pVRPlayer->GetVRGrabMode() == CPortal_Player::VR_GRAB_HAND )
-	{
-		return UpdateObjectVRHand( pVRPlayer, pEntity );
-	}
-
 	Vector forward, right, up;
 	QAngle playerAngles = pPlayer->EyeAngles();
-	// Portal VR: objects held by the gun float in front of its barrel.
+	// Portal VR: objects held by the gun float in front of its barrel. Objects picked up by
+	// hand (no portal gun yet) float the same way along the hand's aim, a bit closer
+	// (vr_hand_hold_scale); held in the hand itself they bumped into the player.
+	CPortal_Player *pVRPlayer = ToPortalPlayer( pPlayer );
+	const int nVRGrabMode = pVRPlayer ? pVRPlayer->GetVRGrabMode() : CPortal_Player::VR_GRAB_NONE;
 	Vector vecVRAimOrigin, vecVRAimDir;
-	const bool bVRGunHold = pVRPlayer && pVRPlayer->GetVRGrabMode() == CPortal_Player::VR_GRAB_GUN && pVRPlayer->GetVRAim( vecVRAimOrigin, vecVRAimDir );
+	const bool bVRGunHold = nVRGrabMode != CPortal_Player::VR_GRAB_NONE && pVRPlayer->GetVRAim( vecVRAimOrigin, vecVRAimDir );
 	if ( bVRGunHold )
 	{
 		VectorAngles( vecVRAimDir, playerAngles );
@@ -3088,6 +3039,8 @@ bool CGrabController::UpdateObject( CBasePlayer *pPlayer, float flError )
 
 	// Add the prop's distance offset
 	distance += m_flDistanceOffset;
+	if ( nVRGrabMode == CPortal_Player::VR_GRAB_HAND )
+		distance *= vr_hand_hold_scale.GetFloat();
 
 	Vector end = start + ( forward * distance );
 

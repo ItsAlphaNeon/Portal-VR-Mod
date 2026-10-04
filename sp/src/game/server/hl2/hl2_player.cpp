@@ -74,7 +74,7 @@ ConVar max_lift_mass_portalgun("max_lift_mass_portalgun", "85", FCVAR_GAMEDLL | 
 ConVar max_lift_size_portalgun("max_lift_size_portalgun", "128", FCVAR_GAMEDLL | FCVAR_ARCHIVE | FCVAR_REPLICATED | FCVAR_NOT_CONNECTED, "Max size the player can lift with +use when holding portal gun");
 
 // Max mass the player can lift with +use. 85 in Portal
-ConVar max_lift_mass("max_lift_mass", "35", FCVAR_GAMEDLL | FCVAR_ARCHIVE | FCVAR_REPLICATED | FCVAR_NOT_CONNECTED, "Max mass the player can lift with +use, 85 in Portal");
+ConVar max_lift_mass("max_lift_mass", "85", FCVAR_GAMEDLL | FCVAR_ARCHIVE | FCVAR_REPLICATED | FCVAR_NOT_CONNECTED, "Max mass the player can lift with +use, 85 in Portal");
 ConVar max_lift_size("max_lift_size", "128", FCVAR_GAMEDLL | FCVAR_ARCHIVE | FCVAR_REPLICATED | FCVAR_NOT_CONNECTED, "Max size the player can lift with +use");
 
 // Do not touch with without seeing me, please! (sjb)
@@ -3170,9 +3170,18 @@ ConVar sv_portalgun_fire_delay_prevents_pickup("sv_portalgun_fire_delay_prevents
 
 void CHL2_Player::PickupObject( CBaseEntity *pObject, bool bLimitMassAndSize )
 {
+	static ConVarRef vr_grab_log( "vr_grab_log" );
+	const bool bLog = vr_grab_log.IsValid() && vr_grab_log.GetBool();
+	if ( bLog )
+		Msg( "[VR grab] PickupObject %s (mass limit %d)\n", pObject->GetDebugName(), bLimitMassAndSize );
+
 	// can't pick up what you're standing on
 	if ( GetGroundEntity() == pObject )
+	{
+		if ( bLog )
+			Msg( "[VR grab]   refused: standing on it\n" );
 		return;
+	}
 	
 	if ( bLimitMassAndSize == true )
 	{
@@ -3180,7 +3189,12 @@ void CHL2_Player::PickupObject( CBaseEntity *pObject, bool bLimitMassAndSize )
 		if (!ActiveWeapon)
 		{
 			if (!CBasePlayer::CanPickupObject(pObject, max_lift_mass.GetFloat(), max_lift_size.GetFloat()))
+			{
+				if ( bLog )
+					Msg( "[VR grab]   refused: too heavy/big without a weapon (max_lift_mass %.0f, mass %.1f)\n", max_lift_mass.GetFloat(),
+						pObject->VPhysicsGetObject() ? pObject->VPhysicsGetObject()->GetMass() : -1.0f );
 				return;
+			}
 		}
 		else
 		{

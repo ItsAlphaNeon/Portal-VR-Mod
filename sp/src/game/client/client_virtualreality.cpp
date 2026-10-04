@@ -236,6 +236,13 @@ CON_COMMAND( vr_gun_calibrate, "Toggle gun placement calibration (free-hand grip
 	g_ClientVirtualReality.SetGunCalibration( !g_ClientVirtualReality.IsCalibratingGun() );
 }
 
+// Debug: press the gun-hand grip for a few commands (pick up / drop without controllers).
+static int s_nDebugGrabCmds = 0;
+CON_COMMAND( vr_debug_grab, "Debug: press the gun grip once (pick up / drop), for testing without controllers" )
+{
+	s_nDebugGrabCmds = 3;
+}
+
 CON_COMMAND( vr_gun_autoplace, "Place the gun on the gun hand from the SteamVR hand skeleton (forgets the calibration)" )
 {
 	vr_gun_calibrated.SetValue( 0 );
@@ -302,7 +309,10 @@ CClientVirtualReality::CClientVirtualReality()
 	m_pMirrorMaterial = NULL;
 	m_pLaserMaterial = NULL;
 	m_bMenuOpen = false;
-	m_bCreditsShown = false;
+	m_bScreenOnly = false;
+	m_bTitleScene = false;
+	m_bTitleCamValid = false;
+	m_pTitleMaterial = NULL;
 	m_bPointerHit = false;
 	m_vecPointerStart.Init();
 	m_vecPointerEnd.Init();
@@ -1270,6 +1280,16 @@ void CClientVirtualReality::UpdateGunBeams( C_BaseAnimating *pGunEntity, const m
 	}
 }
 
+bool CClientVirtualReality::GetTitleCamera( CViewSetup &view ) const
+{
+	if ( !UseVR() || !m_bTitleScene || !m_bTitleCamValid )
+		return false;
+	view.origin = m_vecTitleCamOrigin;
+	view.angles = m_angTitleCam;
+	view.fov = m_flTitleCamFov > 1.0f ? m_flTitleCamFov : 90.0f;
+	return true;
+}
+
 C_BaseEntity *CClientVirtualReality::GetGunModelEntity() const
 {
 	C_BaseEntity *pGun = m_hGunModel.Get();
@@ -1404,6 +1424,24 @@ bool CClientVirtualReality::OverrideView( CViewSetup *pViewMiddle, Vector *pView
 	// including when the head is leaning through a portal).
 	pViewMiddle->zNear = vr_znear.GetFloat();
 	pViewMiddle->zNearViewmodel = vr_znear.GetFloat();
+
+	// Screen-only (title screen, credits): scripted cameras (the title screen's flyby) would
+	// own the view and ignore the head. Nothing but the menu screen is drawn then, so view
+	// from the tracked head instead: head tracking works and the hands, laser and screen agree.
+	C_BasePlayer *pPlayer = C_BasePlayer::GetLocalPlayer();
+	if ( m_bScreenOnly && pPlayer && m_bTrackingInitialized )
+	{
+		if ( m_bTitleScene )
+		{
+			// Keep the flyby camera for the flat view on the screen.
+			m_vecTitleCamOrigin = pViewMiddle->origin;
+			m_angTitleCam = pViewMiddle->angles;
+			m_flTitleCamFov = pViewMiddle->fov;
+			m_bTitleCamValid = true;
+		}
+		pViewMiddle->origin = pPlayer->GetAbsOrigin() + m_vecHeadOffset;
+		pViewMiddle->angles = m_angHead;
+	}
 	m_WorldFromMidEye.SetupMatrixOrgAngles( pViewMiddle->origin, pViewMiddle->angles );
 	return true;
 }
@@ -1449,7 +1487,7 @@ bool CClientVirtualReality::OverrideStereoView( CViewSetup *pViewMiddle, CViewSe
 	// HUD panel: body-locked in yaw, re-centers lazily when you look away from it.
 	// Menus stay where they opened, at eye level.
 	m_vecHudViewer = pViewMiddle->origin;
-	const bool bScreen = m_bMenuOpen || m_bCreditsShown;
+	const bool bScreen = m_bMenuOpen || m_bScreenOnly;
 	if ( !bScreen )
 	{
 		float flYawDelta = AngleDiff( pViewMiddle->angles[YAW], m_flHudYaw );
@@ -1514,6 +1552,14 @@ void CClientVirtualReality::CreateMaterials()
 	pKV->SetInt( "$nofog", 1 );
 	m_pHudMaterialOpaque = materials->CreateMaterial( "__vr_hud_opaque", pKV );
 	m_pHudMaterialOpaque->IncrementReferenceCount();
+
+	pKV = new KeyValues( "UnlitGeneric" );
+	pKV->SetString( "$basetexture", "_rt_vr_title" );
+	pKV->SetInt( "$ignorez", 1 );
+	pKV->SetInt( "$nocull", 1 );
+	pKV->SetInt( "$nofog", 1 );
+	m_pTitleMaterial = materials->CreateMaterial( "__vr_title", pKV );
+	m_pTitleMaterial->IncrementReferenceCount();
 
 	pKV = new KeyValues( "UnlitGeneric" );
 	pKV->SetString( "$basetexture", "_rt_vr_eyes" );
@@ -1601,7 +1647,7 @@ void CClientVirtualReality::LevelShutdown()
 //-----------------------------------------------------------------------------
 float CClientVirtualReality::GetHUDDistance()
 {
-	return ( m_bMenuOpen || m_bCreditsShown ) ? vr_menu_distance.GetFloat() : vr_hud_distance.GetFloat();
+	return ( m_bMenuOpen || m_bScreenOnly ) ? vr_menu_distance.GetFloat() : vr_hud_distance.GetFloat();
 }
 
 bool CClientVirtualReality::ShouldRenderHUDInWorld()
@@ -1622,10 +1668,12 @@ void CClientVirtualReality::GetHUDBounds( Vector *pViewer, Vector *pUL, Vector *
 	*pLR = vHUDOrigin + vHalfWidth - vHalfHeight;
 }
 
+static bool ShowOverlay( const ConVar &var, bool bCalibrating );
+
 void CClientVirtualReality::RenderHUDQuad( bool bBlackout, bool bTranslucent )
 {
 	bool bMenuOpen = g_pMatSystemSurface && g_pMatSystemSurface->IsCursorVisible();
-	if ( !vr_hud_visible.GetBool() && !bMenuOpen && !m_bCreditsShown )
+	if ( !vr_hud_visible.GetBool() && !bMenuOpen && !m_bScreenOnly )
 		return;
 
 	CreateMaterials();
@@ -1634,36 +1682,61 @@ void CClientVirtualReality::RenderHUDQuad( bool bBlackout, bool bTranslucent )
 	GetHUDBounds( &vHead, &vUL, &vUR, &vLL, &vLR );
 
 	CMatRenderContextPtr pRenderContext( materials );
-	if ( m_bCreditsShown )
+	if ( m_bScreenOnly )
 	{
-		// Credits: nothing but the screen.
+		// Credits / title screen: nothing but the screen (and the controllers, to point with).
 		pRenderContext->ClearColor4ub( 0, 0, 0, 255 );
 		pRenderContext->ClearBuffers( true, true );
+		if ( ShowOverlay( vr_show_controllers, false ) )
+		{
+			pRenderContext->MatrixMode( MATERIAL_MODEL );
+			pRenderContext->PushMatrix();
+			pRenderContext->LoadIdentity();
+			DrawControllerModels();
+			pRenderContext->MatrixMode( MATERIAL_MODEL );
+			pRenderContext->PopMatrix();
+		}
 	}
-	IMaterial *pMaterial = ( bMenuOpen || m_bCreditsShown ) ? m_pHudMaterialOpaque : m_pHudMaterial;
-	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, pMaterial );
+	// Title screen: the flat view of the flyby (panorama, cake room) with the menu over it,
+	// like on a monitor. Credits and menus: the UI alone, opaque.
+	const bool bTitle = m_bScreenOnly && m_bTitleScene && m_bTitleCamValid && m_pTitleMaterial;
+	IMaterial *pMaterials[2] = { NULL, NULL };
+	if ( bTitle )
+	{
+		pMaterials[0] = m_pTitleMaterial;
+		pMaterials[1] = m_pHudMaterial;
+	}
+	else
+	{
+		pMaterials[0] = ( bMenuOpen || m_bScreenOnly ) ? m_pHudMaterialOpaque : m_pHudMaterial;
+	}
 
-	CMeshBuilder meshBuilder;
-	meshBuilder.Begin( pMesh, MATERIAL_TRIANGLE_STRIP, 2 );
+	for ( int iLayer = 0; iLayer < 2 && pMaterials[iLayer]; iLayer++ )
+	{
+		IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, pMaterials[iLayer] );
 
-	meshBuilder.Position3fv( vLR.Base() );
-	meshBuilder.TexCoord2f( 0, 1, 1 );
-	meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
+		CMeshBuilder meshBuilder;
+		meshBuilder.Begin( pMesh, MATERIAL_TRIANGLE_STRIP, 2 );
 
-	meshBuilder.Position3fv( vLL.Base() );
-	meshBuilder.TexCoord2f( 0, 0, 1 );
-	meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
+		meshBuilder.Position3fv( vLR.Base() );
+		meshBuilder.TexCoord2f( 0, 1, 1 );
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
 
-	meshBuilder.Position3fv( vUR.Base() );
-	meshBuilder.TexCoord2f( 0, 1, 0 );
-	meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
+		meshBuilder.Position3fv( vLL.Base() );
+		meshBuilder.TexCoord2f( 0, 0, 1 );
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
 
-	meshBuilder.Position3fv( vUL.Base() );
-	meshBuilder.TexCoord2f( 0, 0, 0 );
-	meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
+		meshBuilder.Position3fv( vUR.Base() );
+		meshBuilder.TexCoord2f( 0, 1, 0 );
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
 
-	meshBuilder.End();
-	pMesh->Draw();
+		meshBuilder.Position3fv( vUL.Base() );
+		meshBuilder.TexCoord2f( 0, 0, 0 );
+		meshBuilder.AdvanceVertexF<VTX_HAVEPOS, 1>();
+
+		meshBuilder.End();
+		pMesh->Draw();
+	}
 
 	if ( bMenuOpen )
 		DrawLaser();
@@ -1911,15 +1984,22 @@ void CClientVirtualReality::UpdateMenu()
 	if ( g_PortalVR.GetDigitalAny( VRACTION_MENU ).bPressed )
 		engine->ClientCmd_Unrestricted( enginevgui->IsGameUIVisible() ? "gameui_hide" : "gameui_activate" );
 
-	// End credits: shown like the menu, on a screen straight ahead in a black void.
+	// Screen-only: the menu screen straight ahead in a black void, nothing else drawn.
+	//  - End credits (shown like the menu).
+	//  - The title screen: its background map flies a scripted camera around, which in VR
+	//    takes over the view (nauseating, and the menu drifts away from the laser).
 #ifdef PORTAL
 	const bool bCredits = g_bPortalRollingCredits;
 #else
 	const bool bCredits = false;
 #endif
-	if ( bCredits && !m_bCreditsShown )
+	m_bTitleScene = engine->IsLevelMainMenuBackground();
+	if ( !m_bTitleScene )
+		m_bTitleCamValid = false;
+	const bool bScreenOnly = bCredits || m_bTitleScene;
+	if ( bScreenOnly && !m_bScreenOnly )
 		m_flHudYaw = m_angHead[YAW];
-	m_bCreditsShown = bCredits;
+	m_bScreenOnly = bScreenOnly;
 
 	bool bMenuOpen = enginevgui->IsGameUIVisible() || ( g_pMatSystemSurface && g_pMatSystemSurface->IsCursorVisible() );
 	if ( bMenuOpen && !m_bMenuOpen )
@@ -2197,6 +2277,11 @@ void CClientVirtualReality::CreateMove( float flFrametime, CUserCmd *cmd )
 	// Gun grip: pick up / press buttons along the gun, press again to drop (server toggles).
 	if ( g_PortalVR.GetDigital( VRACTION_GUN_GRAB, gunHand ).bDown )
 		vr.buttons |= VRBTN_GUN_GRAB;
+	if ( s_nDebugGrabCmds > 0 )
+	{
+		vr.buttons |= VRBTN_GUN_GRAB;
+		s_nDebugGrabCmds--;
+	}
 
 
 	//

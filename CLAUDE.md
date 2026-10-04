@@ -20,6 +20,7 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
 - **Hands:** everything interactive is on the **right (gun) controller**.
   - The left hand only walks; it is also used during gun calibration.
 - **Picking up:** right-grip *press* toggles pick-up/drop through the gun, held at the barrel like vanilla. Free-hand grabbing was removed at the user's request.
+  - **Without the portal gun** (first chambers) the right hand grabs what it touches or points at (calibrated aim + 6-unit sweep), and the object floats in front like with the gun at `vr_hand_hold_scale` (0.8) of the distance. Holding it in the hand bumped the player collider and dropped it.
 - **Visuals:** no player body. The only visible things are the SteamVR controller models plus the floating gun. Don't show the hand skeleton (it's debug only).
 - **Floor/ceiling portal exits:** instant, yaw-only, horizon level by default. `vr_portal_view_mode 1` gives the original rolling view as an option.
 - **Gun model:** the RTX Portal gun (user-supplied .blend). Its placement is the user's in-headset calibration, which is baked in as the cvar defaults.
@@ -127,7 +128,7 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
 - `hud_crosshair.cpp`, `portal/hud_quickinfo.cpp`: no reticle in VR.
 - `portal/c_portal_player.cpp`: the HMD eye, CalcView, no roll fix-up; the local body isn't drawn in VR.
 - `portal/c_weapon_portalgun.cpp`: the world-model gun isn't drawn for the local player in VR, and its view-model grab beams stay off.
-- `portal/portal_credits.cpp`: `g_bPortalRollingCredits` makes `CClientVirtualReality` show the HUD texture on the menu screen (opaque, eye level) and clear each eye to black (`m_bCreditsShown`).
+- **Screen-only mode** (`m_bScreenOnly`): end credits (`portal_credits.cpp` `g_bPortalRollingCredits`) and the title screen (`engine->IsLevelMainMenuBackground()`). Each eye is cleared to black, the controllers are redrawn, and the menu screen is drawn straight ahead. `OverrideView` uses the tracked head instead of the scripted camera. On the title screen, `CViewRender::DrawVRTitleScene` (called from `view.cpp` once per frame) renders the flyby camera flat into `_rt_vr_title` (created in `vr_openvr.cpp`), and the screen shows it under the menu.
 - `portal/c_prop_portal.cpp` (`Simulate`): adds the VR gun to the portal ghost-renderable list when it reaches into a portal hole. That gives the clip plane on this side and a ghost out of the linked portal.
 
 ### Shared: `sp/src/game/shared`
@@ -141,11 +142,13 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
 - `portal/portal_player.cpp`:
   - `EyePosition` is the HMD.
   - `GetVRAim` is the muzzle. It falls back to the eye if the muzzle is behind a wall **or the eye→muzzle segment crosses an enabled `trigger_portal_cleanser`**; that is the fizzler fix.
-  - `VRProcessGrabButtons`: a gun-grip press injects `IN_USE`.
-  - `FindUseEntity`: gun ray, then a 6-unit hull fallback.
+  - `VRProcessGrabButtons`: a gun-grip press injects `IN_USE`; mode GUN with the portal gun, HAND without.
+  - `FindUseEntity`: GUN = gun ray, then a 6-unit hull fallback. HAND = `VRFindHandEntity` on the gun hand (touch radius `vr_grab_radius` 14, then ray + hull along the calibrated aim).
+  - `vr_grab_log 1` logs every grab: what was near/hit, `PickupObject` refusals (standing on it, too heavy) and why the pickup controller let go.
+  - **`max_lift_mass` is 85** (Portal's value; code default + autoexec). HL2's 35 can't lift the 40 kg cube without a weapon.
   - Precaches the gun model.
-  - The old free-hand grab code (`VRFindHandEntity`, `UpdateObjectVRHand`, `vr_grab_radius`, `vr_pull_distance`, `vr_throw_*`) is now unused.
-- `portal/weapon_physcannon.cpp`: the grab controller targets the muzzle in gun mode.
+  - Unused leftovers of the old free-hand grab: `vr_throw_*`, `m_matVRHandFromObject`.
+- `portal/weapon_physcannon.cpp`: the grab controller holds objects along the VR aim from the muzzle (GUN and HAND modes; HAND is scaled by `vr_hand_hold_scale`).
 - `portal/weapon_portalgun.cpp`: VR aim; `portal_vanilla_gameplay`.
 - `portal/portal_player.cpp` `PostThink`: feeds the nerve gas countdown (`startneurotoxins`, escape_02) into `SetBonusProgress`, which the `vgui_neurotoxin_countdown` screens display. That code was missing, so the timer read 00:00:00.
 
@@ -221,6 +224,8 @@ Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. Th
 - Verified in the headset: default gun pose = the user's calibration; clear glass tube with an emissive portal-coloured core; tuned core glow; grab electricity on the VR gun (tuned with `vr_gun_beam_edit`); smooth turning per rendered frame (was per tick: judder); no crash on death (beam double free); New Game chapters.
 - Verified with the null HMD / flat test only: nerve gas timer counts down (`cl_pdump` shows `m_iBonusProgress`); credits on the menu screen (`vrtest_credits.cfg`).
 - Not exercised: the non-Frame controller bindings (Index, Touch, Cosmos, Vive, WMR, G2).
+- Verified in the headset (later the same day): picking up cubes without the gun; title screen = black room with the flat flyby + menu on a screen.
+- Testing: `vrtest_grab.cfg` (testchmb_a_00; waits out the frozen wake-up intro), `vrtest_title.cfg` (no map), `vr_debug_grab` presses the gun grip without controllers.
 
 **Ideas and known gaps**
 - The gun glow is a sprite plus material tint. The first-person viewmodel effects (beam, particle glow) aren't attached to the new model.
