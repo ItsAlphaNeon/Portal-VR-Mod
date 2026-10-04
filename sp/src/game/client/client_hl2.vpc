@@ -34,6 +34,8 @@ $Project "Client (Portal_HL2)"
 		{
 			$File	"vr\vr_openvr.cpp"
 			$File	"vr\vr_openvr.h"
+			$File	"vr\vr_settingspanel.cpp"
+			$File	"vr\vr_settingspanel.h"
 			$File	"vr\vr_d3d.h"
 			$File	"vr\vr_d3d.cpp"
 			{

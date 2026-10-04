@@ -959,6 +959,10 @@ bool CViewRender::ShouldDrawViewModel( bool bDrawViewmodel )
 	if ( !bDrawViewmodel )
 		return false;
 
+	// Portal VR: the hand-held gun is a world model (CClientVirtualReality::UpdateGunModel).
+	if ( UseVR() )
+		return false;
+
 	if ( !r_drawviewmodel.GetBool() )
 		return false;
 
@@ -1064,6 +1068,10 @@ void CViewRender::DrawViewModels( const CViewSetup &view, bool drawViewmodel )
 	}
 
 	render->Push3DView( viewModelSetup, 0, pRTColor, GetFrustum(), pRTDepth );
+
+	// Portal VR: controller models / hand skeletons, depth-tested against the world.
+	if ( view.m_eStereoEye != STEREO_EYE_MONO )
+		g_ClientVirtualReality.DrawWorldOverlays();
 
 #ifdef PORTAL //the depth range hack doesn't work well enough for the portal mod (and messing with the depth hack values makes some models draw incorrectly)
 				//step up to a full depth clear if we're extremely close to a portal (in a portal environment)

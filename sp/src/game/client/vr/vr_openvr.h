@@ -20,6 +20,7 @@
 #include "sourcevr/isourcevirtualreality.h"
 #include "mathlib/vector2d.h"
 #include "vr/vr_usercmd.h"
+#include "tier1/utlvector.h"
 
 class ITexture;
 class IMaterialSystem;
@@ -30,6 +31,18 @@ struct VRTrackedPose_t
 	matrix3x4_t	mat;			// tracking space (Source axes, game units)
 	Vector		vecVelocity;	// tracking space, units/s
 	Vector		vecAngVelocity;	// tracking space, degrees/s (axis * rate)
+};
+
+// SteamVR hand skeleton (HandSkeletonBone in the SteamVR docs): 0 root, 1 wrist,
+// 2-5 thumb, 6-10 index, 11-15 middle, 16-20 ring, 21-25 pinky, 26-30 aux.
+#define VR_SKELETON_BONE_COUNT 31
+
+// A vertex of a SteamVR controller render model (Source axes and units, model space).
+struct VRRenderModelVertex_t
+{
+	Vector			pos;
+	Vector			normal;
+	unsigned char	color[4];
 };
 
 enum VRAction_t
@@ -115,6 +128,9 @@ public:
 	// compositor (WaitGetPoses) and samples HMD + hand poses for this frame.
 	void BeginFrame();
 
+	// Called after an eye has been rendered: copies it into the shared submit texture.
+	void ResolveEye( VREye eEye );
+
 	// Called after both eyes have been rendered into the eye texture.
 	void SubmitFrame();
 
@@ -125,6 +141,20 @@ public:
 	// Poses for the current frame (tracking space).
 	const VRTrackedPose_t &GetHmdPose() const { return m_HmdPose; }
 	const VRTrackedPose_t &GetHandPose( int hand ) const { return m_HandPose[hand]; }
+
+	// Raw pose of the controller held in a hand: the origin of its SteamVR render model.
+	const VRTrackedPose_t &GetDevicePose( int hand ) const { return m_DevicePose[hand]; }
+	// SteamVR render model of the controller in a hand ("" until known).
+	const char *GetRenderModelName( int hand ) const { return m_szRenderModel[hand]; }
+	// Polls an async render model load: 1 = done (geometry filled), 0 = still loading, -1 = failed.
+	int LoadRenderModel( const char *pszName, CUtlVector<VRRenderModelVertex_t> &verts, CUtlVector<unsigned short> &indices );
+
+	// Live hand skeleton from SteamVR skeletal input (tracking space). NULL if the hand has none.
+	const matrix3x4_t *GetSkeleton( int hand ) const { return m_bSkeletonValid[hand] ? m_SkeletonBones[hand] : NULL; }
+	// SteamVR's "grip limit" reference skeleton (a fist closed around the controller), relative
+	// to the hand's grip pose. False if the hand has no skeletal data this frame.
+	bool GetGripFromFistSkeleton( int hand, matrix3x4_t *pBones );
+	static int GetSkeletonBoneParent( int bone );
 
 	// Head-relative eye transforms (tracking-space units, Source axes).
 	const matrix3x4_t &GetHeadFromEye( VREye eEye ) const { return m_HeadFromEye[eEye]; }
@@ -164,10 +194,19 @@ private:
 
 	VRTrackedPose_t m_HmdPose;
 	VRTrackedPose_t m_HandPose[VR_HAND_COUNT];
+	VRTrackedPose_t m_DevicePose[VR_HAND_COUNT];
+	unsigned int m_nDeviceIndex[VR_HAND_COUNT];
+	char m_szRenderModel[VR_HAND_COUNT][128];
+	VRTrackedPose_t m_SkeletonRoot[VR_HAND_COUNT];
+	matrix3x4_t m_SkeletonBones[VR_HAND_COUNT][VR_SKELETON_BONE_COUNT];
+	bool m_bSkeletonValid[VR_HAND_COUNT];
+	bool m_bSkeletonRootFromDevice[VR_HAND_COUNT];
 	matrix3x4_t m_HeadFromEye[2];
 
-	// Render target that holds both eyes side by side.
+	// Render target that holds both eyes side by side (what SteamVR gets), and the per-eye
+	// targets the eyes are rendered into.
 	ITexture *m_pEyeTexture;
+	ITexture *m_pEyeRT[2];
 
 	// Input handles (vr::VRActionHandle_t / VRInputValueHandle_t are uint64).
 	unsigned long long m_hActionSet;

@@ -21,6 +21,7 @@
 #include "client_virtualreality.h"
 
 #include "materialsystem/itexture.h"
+#include "materialsystem/imaterialvar.h"
 #include "materialsystem/materialsystem_config.h"
 #include "view_shared.h"
 #include "view.h"
@@ -30,6 +31,7 @@
 #include "in_buttons.h"
 #include "usercmd.h"
 #include "c_baseplayer.h"
+#include "gamerules.h"
 #include "prediction.h"
 #include "KeyValues.h"
 #include "vgui/ISurface.h"
@@ -43,8 +45,14 @@
 
 extern vgui::IInputInternal *g_InputInternal;
 
+#include "filesystem.h"
+#include "vguicenterprint.h"
+#include "clientleafsystem.h"
+#include "c_baseanimating.h"
+
 #ifdef PORTAL
 #include "c_portal_player.h"
+#include "c_weapon_portalgun.h"
 #endif
 
 // memdbgon must be the last include file in a .cpp file!!!
@@ -64,18 +72,28 @@ ConVar vr_render_hud_in_world( "vr_render_hud_in_world", "1" );
 
 // Hands and gun
 ConVar vr_gun_hand( "vr_gun_hand", "1", FCVAR_ARCHIVE, "Hand that holds the portal gun: 0 = left, 1 = right." );
-// The gun's handle ("ValveBiped.Base" bone) is placed at the grip, plus this offset in grip space.
-ConVar vr_gun_offset_x( "vr_gun_offset_x", "0", FCVAR_ARCHIVE, "Portal gun handle offset from the controller grip, forward (units)." );
-ConVar vr_gun_offset_y( "vr_gun_offset_y", "0", FCVAR_ARCHIVE, "Portal gun handle offset from the controller grip, left (units)." );
-ConVar vr_gun_offset_z( "vr_gun_offset_z", "0", FCVAR_ARCHIVE, "Portal gun handle offset from the controller grip, up (units)." );
-ConVar vr_gun_pitch( "vr_gun_pitch", "0", FCVAR_ARCHIVE, "Extra pitch of the portal gun relative to the controller grip (degrees, + = down)." );
-ConVar vr_gun_yaw( "vr_gun_yaw", "0", FCVAR_ARCHIVE, "Extra yaw of the portal gun relative to the controller grip (degrees)." );
-ConVar vr_aim_offset_forward( "vr_aim_offset_forward", "25", FCVAR_ARCHIVE, "Distance of the portal gun muzzle in front of the handle (units)." );
+ConVar vr_gun_model( "vr_gun_model", "models/vr/portalgun_rtx.mdl", FCVAR_ARCHIVE, "Model of the hand-held portal gun (+X along the barrel)." );
+ConVar vr_gun_scale( "vr_gun_scale", "1", FCVAR_ARCHIVE, "Size of the hand-held portal gun model." );
+// Pose of the gun model in the gun controller's grip space. Defaults: calibrated on the Steam
+// Frame right controller (2026-10-03). Set by vr_gun_calibrate (saved to
+// cfg/vr_gun_calibration.cfg), or from the SteamVR hand skeleton while vr_gun_calibrated is 0.
+ConVar vr_gun_x( "vr_gun_x", "3.689", FCVAR_ARCHIVE, "Gun model position in the controller grip: forward (units)." );
+ConVar vr_gun_y( "vr_gun_y", "0.630", FCVAR_ARCHIVE, "Gun model position in the controller grip: left (units)." );
+ConVar vr_gun_z( "vr_gun_z", "-6.833", FCVAR_ARCHIVE, "Gun model position in the controller grip: up (units)." );
+ConVar vr_gun_pitch( "vr_gun_pitch", "63.26", FCVAR_ARCHIVE, "Gun model rotation in the controller grip: pitch (degrees, + = down)." );
+ConVar vr_gun_yaw( "vr_gun_yaw", "-28.52", FCVAR_ARCHIVE, "Gun model rotation in the controller grip: yaw (degrees, + = left)." );
+ConVar vr_gun_roll( "vr_gun_roll", "-28.18", FCVAR_ARCHIVE, "Gun model rotation in the controller grip: roll (degrees)." );
+ConVar vr_gun_calibrated( "vr_gun_calibrated", "1", FCVAR_ARCHIVE, "1 = use the saved gun pose (vr_gun_x...), 0 = place the gun from the SteamVR hand skeleton." );
+ConVar vr_show_controllers( "vr_show_controllers", "1", FCVAR_ARCHIVE, "Draw the SteamVR controller models: 0 = never, 1 = always, 2 = only while calibrating the gun." );
+ConVar vr_show_skeleton( "vr_debug_skeleton", "0", 0, "Debug: draw the SteamVR hand skeletons: 0 = never, 1 = always, 2 = only while calibrating the gun." );
 
-// v_portalgun.mdl geometry (model space, idle pose; measured with vr_gun_debug):
-// the handle bone and the barrel direction from the handle toward the muzzle.
-static const Vector s_vecGunHandleInModel( 7.04f, -8.35f, -11.35f );
-static const QAngle s_angGunBarrelInModel( 5.3f, -6.7f, 0.0f );
+// Muzzle of the gun model (model space, before vr_gun_scale). See tools/gunmodel.
+static const Vector s_vecGunMuzzleInModel( 16.94f, 0.0f, 0.0f );
+
+// Aim direction relative to the gun model's barrel axis (set in calibration with the right stick).
+ConVar vr_gun_aim_pitch( "vr_gun_aim_pitch", "2.97", FCVAR_ARCHIVE, "Aim direction relative to the gun model: pitch (degrees, + = down)." );
+ConVar vr_gun_aim_yaw( "vr_gun_aim_yaw", "6.84", FCVAR_ARCHIVE, "Aim direction relative to the gun model: yaw (degrees, + = left)." );
+ConVar vr_gun_aim_adjust_speed( "vr_gun_aim_adjust_speed", "15", FCVAR_ARCHIVE, "Degrees per second the right stick turns the aim while calibrating." );
 
 // Locomotion
 ConVar vr_move_hand_relative( "vr_move_hand_relative", "0", FCVAR_ARCHIVE, "0 = stick moves toward where you look, 1 = toward where your free hand points." );
@@ -85,6 +103,20 @@ ConVar vr_snap_turn_angle( "vr_snap_turn_angle", "45", FCVAR_ARCHIVE );
 ConVar vr_smooth_turn_speed( "vr_smooth_turn_speed", "180", FCVAR_ARCHIVE, "Smooth turn speed (degrees per second)." );
 ConVar vr_roomscale_deadzone( "vr_roomscale_deadzone", "4", FCVAR_ARCHIVE, "How far (units) the head can move from the body before the body follows. Lets you lean." );
 ConVar vr_crouch_height( "vr_crouch_height", "44", FCVAR_ARCHIVE, "Head height (units) below which you physically crouch." );
+
+// Comfort / play style
+ConVar vr_portal_view_mode( "vr_portal_view_mode", "0", FCVAR_ARCHIVE, "Going through floor/ceiling portals: 0 = instant, horizon stays level; 1 = original game: the view turns with the portal, then rolls back level." );
+ConVar vr_portal_lerp_time( "vr_portal_lerp_time", "0.8", FCVAR_ARCHIVE, "Seconds the view takes to roll back level with vr_portal_view_mode 1." );
+static void SeatedChanged( IConVar *var, const char *pOldValue, float flOldValue );
+ConVar vr_seated( "vr_seated", "0", FCVAR_ARCHIVE, "Seated play: your current head height becomes Chell's standing eye height (re-measured by recenter).", SeatedChanged );
+ConVar vr_seated_offset( "vr_seated_offset", "0", FCVAR_ARCHIVE, "Height (units) added to the head while seated. Set by vr_seated / recenter." );
+ConVar vr_eye_height( "vr_eye_height", "64", FCVAR_ARCHIVE, "Standing eye height (units) seated mode lifts you to." );
+
+static void SeatedChanged( IConVar *var, const char *pOldValue, float flOldValue )
+{
+	if ( vr_seated.GetBool() )
+		g_ClientVirtualReality.MeasureSeatedHeight();
+}
 
 // View
 ConVar vr_znear( "vr_znear", "2", FCVAR_ARCHIVE, "Near clip plane in VR (units)." );
@@ -98,12 +130,78 @@ ConVar vr_hud_visible( "vr_hud_visible", "1", FCVAR_ARCHIVE );
 ConVar vr_menu_distance( "vr_menu_distance", "60", FCVAR_ARCHIVE, "Distance of the menu panel (units)." );
 ConVar vr_menu_width( "vr_menu_width", "80", FCVAR_ARCHIVE, "Width of the menu panel (units)." );
 
+// Debug: skip parts of the VR frame (bitmask) to bisect problems.
+ConVar vr_dbg_skip( "vr_dbg_skip", "0", 0, "1 calibration, 2 gun model, 4 overlays, 8 menu, 16 hand devices/skeleton, 32 CreateMove VR block" );
+
+// Automated testing: exec a cfg a few seconds after spawning in a map, log the eye every frame.
+ConVar vr_test_cfg( "vr_test_cfg", "", 0, "Debug: cfg to exec vr_test_delay seconds after spawning in each map." );
+ConVar vr_test_delay( "vr_test_delay", "4", 0 );
+ConVar vr_log_eye( "vr_log_eye", "0", 0, "Debug: log the eye position every frame to vr_log.txt." );
+
+// vr_after <seconds> <command>: run a command later ("wait" does nothing in this engine).
+struct VRDelayedCommand_t
+{
+	float flTime;
+	char szCommand[256];
+};
+static CUtlVector<VRDelayedCommand_t> s_DelayedCommands;
+
+CON_COMMAND( vr_after, "vr_after <seconds> <command...>: run a command after a delay" )
+{
+	if ( args.ArgC() < 3 )
+		return;
+	VRDelayedCommand_t cmd;
+	cmd.flTime = gpGlobals->realtime + atof( args[1] );
+	const char *pszRest = args.ArgS() + Q_strlen( args[1] );
+	while ( *pszRest == ' ' || *pszRest == '\t' )
+		pszRest++;
+	Q_strncpy( cmd.szCommand, pszRest, sizeof( cmd.szCommand ) );
+	// Strip surrounding quotes.
+	int nLen = Q_strlen( cmd.szCommand );
+	if ( nLen >= 2 && cmd.szCommand[0] == '"' && cmd.szCommand[nLen - 1] == '"' )
+	{
+		cmd.szCommand[nLen - 1] = 0;
+		memmove( cmd.szCommand, cmd.szCommand + 1, nLen - 1 );
+	}
+	s_DelayedCommands.AddToTail( cmd );
+}
+
+static void RunDelayedCommands()
+{
+	for ( int i = s_DelayedCommands.Count() - 1; i >= 0; i-- )
+	{
+		if ( gpGlobals->realtime < s_DelayedCommands[i].flTime )
+			continue;
+		char szCommand[260];
+		Q_snprintf( szCommand, sizeof( szCommand ), "%s\n", s_DelayedCommands[i].szCommand );
+		s_DelayedCommands.Remove( i );
+		engine->ClientCmd_Unrestricted( szCommand );
+	}
+}
+
 // Mirror
 ConVar vr_mirror( "vr_mirror", "1", FCVAR_ARCHIVE, "Show the left eye in the desktop window." );
 
 CON_COMMAND( vr_recenter, "Put your body back under your head" )
 {
 	g_ClientVirtualReality.Recenter();
+}
+
+CON_COMMAND( vr_debug_turn, "Debug: turn the play space by <degrees>" )
+{
+	if ( args.ArgC() > 1 )
+		g_ClientVirtualReality.DebugTurn( atof( args[1] ) );
+}
+
+CON_COMMAND( vr_gun_calibrate, "Toggle gun placement calibration (free-hand grip moves the gun, A saves, B resets)" )
+{
+	g_ClientVirtualReality.SetGunCalibration( !g_ClientVirtualReality.IsCalibratingGun() );
+}
+
+CON_COMMAND( vr_gun_autoplace, "Place the gun on the gun hand from the SteamVR hand skeleton (forgets the calibration)" )
+{
+	vr_gun_calibrated.SetValue( 0 );
+	g_ClientVirtualReality.AutoPlaceGun( true );
 }
 
 //-----------------------------------------------------------------------------
@@ -123,11 +221,38 @@ CClientVirtualReality::CClientVirtualReality()
 	m_flHudYaw = 0.0f;
 	m_vecHeadOffset.Init( 0, 0, 64 );
 	m_angHead.Init();
+	m_vecPoseOrigin.Init();
+	m_flTestStartTime = -1.0f;
+	m_flDuckJumpOffset = 0.0f;
+	m_bDuckRequested = false;
+	m_bPortalLerpActive = false;
+	SetIdentityMatrix( m_matPortalLerp );
+	m_qPortalLerpStart.Init( 0, 0, 0, 1 );
+	m_flPortalLerpStartTime = 0.0f;
 	for ( int i = 0; i < VR_HAND_COUNT; i++ )
 	{
 		SetIdentityMatrix( m_WorldFromHand[i] );
 		m_bHandValid[i] = false;
+		m_ControllerModel[i].szName[0] = 0;
+		m_ControllerModel[i].nState = 0;
+		m_ControllerModel[i].pMesh = NULL;
 	}
+	SetIdentityMatrix( m_WorldFromGunModel );
+	SetIdentityMatrix( m_FreeFromGunModel );
+	m_bGunAutoPlaced = false;
+	m_bCalibrating = false;
+	m_bCalibGrabbing = false;
+	m_flCalibHintTime = 0.0f;
+	m_pControllerMaterial = NULL;
+	m_pOverlayMaterial = NULL;
+	m_pGlowMaterial = NULL;
+	m_pGunMaterial = NULL;
+	m_pGunGlassMaterial = NULL;
+	m_flGunFireTime = -100.0f;
+	m_flGunLastNextAttack = 0.0f;
+	m_flGunHoldBlend = 0.0f;
+	m_bGunWasHolding = false;
+	m_vecGunGlow.Init( 1, 1, 1 );
 	m_pHudMaterial = NULL;
 	m_pHudMaterialOpaque = NULL;
 	m_pMirrorMaterial = NULL;
@@ -171,6 +296,7 @@ InitReturnVal_t CClientVirtualReality::Init()
 
 void CClientVirtualReality::Shutdown()
 {
+	ReleaseControllerModels();
 	g_PortalVR.Shutdown();
 	BaseClass::Shutdown();
 }
@@ -206,11 +332,16 @@ void CClientVirtualReality::TrackingToWorld( const matrix3x4_t &trk, const Vecto
 	Vector vecOrigin = vecPlayerOrigin + TrackingOffsetToWorld( Vector( 0, 0, 0 ) );
 	MatrixSetColumn( vecOrigin, 3, playspace );
 	ConcatTransforms( playspace, trk, world );
+
+	// vr_portal_view_mode 1: the whole play space is still turned by the last portal,
+	// rotating around the head, and settles back level.
+	if ( m_bPortalLerpActive )
+		ConcatTransforms( m_matPortalLerp, world, world );
 }
 
 Vector CClientVirtualReality::TrackingOffsetToWorld( const Vector &trk ) const
 {
-	Vector vecLocal( trk.x - m_vecTrackingCenter.x, trk.y - m_vecTrackingCenter.y, trk.z );
+	Vector vecLocal( trk.x - m_vecTrackingCenter.x, trk.y - m_vecTrackingCenter.y, trk.z + GetHeightOffset() );
 	matrix3x4_t yaw;
 	AngleMatrix( QAngle( 0, m_flTrackingYaw, 0 ), yaw );
 	Vector vecWorld;
@@ -238,6 +369,42 @@ void CClientVirtualReality::Recenter()
 	const VRTrackedPose_t &hmd = g_PortalVR.GetHmdPose();
 	if ( hmd.bValid )
 		m_vecTrackingCenter.Init( hmd.mat[0][3], hmd.mat[1][3], 0.0f );
+	if ( vr_seated.GetBool() )
+		MeasureSeatedHeight();
+}
+
+float CClientVirtualReality::GetHeightOffset() const
+{
+	return ( vr_seated.GetBool() ? vr_seated_offset.GetFloat() : 0.0f ) + m_flDuckJumpOffset;
+}
+
+float CClientVirtualReality::GetHeadHeight() const
+{
+	// Without the duck-jump compensation: that one follows the hull, not your head.
+	return g_PortalVR.GetHmdPose().mat[2][3] + ( vr_seated.GetBool() ? vr_seated_offset.GetFloat() : 0.0f );
+}
+
+//-----------------------------------------------------------------------------
+// Single-player Source "duck-jumps": a jump tucks the hull in the air, which lifts the
+// origin by the duck height, and the flat game hides that by lowering the view offset in
+// the same tick. The HMD sets our eye height, so do the same thing to the play space:
+// follow the view offset whenever the duck wasn't asked for (crouch button / real crouch).
+//-----------------------------------------------------------------------------
+void CClientVirtualReality::UpdateDuckJumpOffset( C_BasePlayer *pPlayer )
+{
+	m_flDuckJumpOffset = 0.0f;
+	if ( m_bDuckRequested || !pPlayer->IsAlive() || !g_pGameRules )
+		return;
+	m_flDuckJumpOffset = MIN( 0.0f, pPlayer->GetViewOffset().z - g_pGameRules->GetViewVectors()->m_vView.z );
+}
+
+void CClientVirtualReality::MeasureSeatedHeight()
+{
+	const VRTrackedPose_t &hmd = g_PortalVR.GetHmdPose();
+	if ( !hmd.bValid )
+		return;
+	vr_seated_offset.SetValue( MAX( 0.0f, vr_eye_height.GetFloat() - hmd.mat[2][3] ) );
+	VRLog( "Seated: head %.1f, offset %.1f", hmd.mat[2][3], vr_seated_offset.GetFloat() );
 }
 
 void CClientVirtualReality::ApplyTurn( float flDegrees )
@@ -285,14 +452,69 @@ void CClientVirtualReality::OnLocalPlayerPortalled( const VMatrix &matPortalTran
 	float flDelta = AngleNormalize( flNewYaw - m_angHead[YAW] );
 	ApplyTurn( flDelta );
 
+	if ( vr_portal_view_mode.GetInt() == 1 )
+	{
+		// Original-game feel: start with the full portal rotation (the view comes out of the
+		// exit portal exactly as it went in) and let it settle back to level. The yaw part is
+		// already applied above; the rest is extra = portal * inverse( yaw ).
+		matrix3x4_t matPortal, matYaw, matYawInv, matExtra;
+		matPortal = matPortalTransform.As3x4();
+		MatrixSetColumn( vec3_origin, 3, matPortal );
+		AngleMatrix( QAngle( 0, flDelta, 0 ), matYaw );
+		MatrixInvert( matYaw, matYawInv );
+		ConcatTransforms( matPortal, matYawInv, matExtra );
+		MatrixQuaternion( matExtra, m_qPortalLerpStart );
+		// If we're mid-lerp from a previous portal, fold the remaining rotation in.
+		if ( m_bPortalLerpActive )
+		{
+			Quaternion qRemaining, qCombined;
+			GetPortalLerpRotation( qRemaining );
+			QuaternionMult( m_qPortalLerpStart, qRemaining, qCombined );
+			m_qPortalLerpStart = qCombined;
+		}
+		m_flPortalLerpStartTime = gpGlobals->realtime;
+		m_bPortalLerpActive = true;
+	}
+
 	g_PortalVR.TriggerHaptic( VR_HAND_LEFT, 0.05f, 60.0f, 0.4f );
 	g_PortalVR.TriggerHaptic( VR_HAND_RIGHT, 0.05f, 60.0f, 0.4f );
+}
+
+// Remaining extra rotation of a vr_portal_view_mode 1 transition.
+bool CClientVirtualReality::GetPortalLerpRotation( Quaternion &q ) const
+{
+	float flTime = MAX( 0.01f, vr_portal_lerp_time.GetFloat() );
+	float t = ( gpGlobals->realtime - m_flPortalLerpStartTime ) / flTime;
+	if ( t >= 1.0f )
+		return false;
+	t = SimpleSpline( clamp( t, 0.0f, 1.0f ) );
+	Quaternion qIdentity( 0, 0, 0, 1 );
+	QuaternionSlerp( m_qPortalLerpStart, qIdentity, t, q );
+	return true;
 }
 
 void CClientVirtualReality::UpdateWorldPoses( C_BasePlayer *pPlayer )
 {
 	const VRTrackedPose_t &hmd = g_PortalVR.GetHmdPose();
 	const Vector vecOrigin = pPlayer->GetAbsOrigin();
+	UpdateDuckJumpOffset( pPlayer );
+
+	// Portal view lerp: a rotation of the whole play space around the (unrotated) head.
+	m_bPortalLerpActive = false;
+	Quaternion qLerp;
+	if ( vr_portal_view_mode.GetInt() == 1 && m_flPortalLerpStartTime > 0.0f && GetPortalLerpRotation( qLerp ) )
+	{
+		matrix3x4_t worldHead, rot;
+		TrackingToWorld( hmd.mat, vecOrigin, worldHead );
+		Vector vecPivot;
+		MatrixGetColumn( worldHead, 3, vecPivot );
+		QuaternionMatrix( qLerp, rot );
+		Vector vecRotatedPivot;
+		VectorRotate( vecPivot, rot, vecRotatedPivot );
+		MatrixSetColumn( vecPivot - vecRotatedPivot, 3, rot );	// x' = pivot + R * ( x - pivot )
+		m_matPortalLerp = rot;
+		m_bPortalLerpActive = true;
+	}
 
 	matrix3x4_t worldHead;
 	TrackingToWorld( hmd.mat, vecOrigin, worldHead );
@@ -300,12 +522,14 @@ void CClientVirtualReality::UpdateWorldPoses( C_BasePlayer *pPlayer )
 	MatrixAngles( worldHead, m_angHead );
 	m_vecHeadOffset = TrackingOffsetToWorld( Vector( hmd.mat[0][3], hmd.mat[1][3], hmd.mat[2][3] ) );
 
+	m_vecPoseOrigin = vecOrigin;
 	for ( int i = 0; i < VR_HAND_COUNT; i++ )
 	{
 		const VRTrackedPose_t &hand = g_PortalVR.GetHandPose( i );
 		m_bHandValid[i] = hand.bValid;
 		TrackingToWorld( hand.mat, vecOrigin, m_WorldFromHand[i] );
 	}
+	UpdateGunTransform();
 
 #ifdef PORTAL
 	C_Portal_Player *pPortalPlayer = ToPortalPlayer( pPlayer );
@@ -321,26 +545,468 @@ bool CClientVirtualReality::GetHandWorldPose( int hand, Vector &origin, QAngle &
 	return m_bHandValid[hand];
 }
 
-// World transform of the gun barrel: origin at the handle, x axis along the barrel.
-static void GetGunBarrelTransform( const matrix3x4_t &worldFromGrip, matrix3x4_t &worldFromBarrel )
+//-----------------------------------------------------------------------------
+// Portal gun placement
+//-----------------------------------------------------------------------------
+static void GetGripFromGunModel( matrix3x4_t &gripFromModel )
 {
-	matrix3x4_t gripFromBarrel;
-	AngleMatrix( QAngle( vr_gun_pitch.GetFloat(), vr_gun_yaw.GetFloat(), 0 ),
-		Vector( vr_gun_offset_x.GetFloat(), vr_gun_offset_y.GetFloat(), vr_gun_offset_z.GetFloat() ), gripFromBarrel );
-	ConcatTransforms( worldFromGrip, gripFromBarrel, worldFromBarrel );
+	AngleMatrix( QAngle( vr_gun_pitch.GetFloat(), vr_gun_yaw.GetFloat(), vr_gun_roll.GetFloat() ),
+		Vector( vr_gun_x.GetFloat(), vr_gun_y.GetFloat(), vr_gun_z.GetFloat() ), gripFromModel );
+}
+
+static void SetGripFromGunModel( const matrix3x4_t &gripFromModel )
+{
+	QAngle ang;
+	Vector pos;
+	MatrixAngles( gripFromModel, ang, pos );
+	vr_gun_x.SetValue( pos.x );
+	vr_gun_y.SetValue( pos.y );
+	vr_gun_z.SetValue( pos.z );
+	vr_gun_pitch.SetValue( ang[PITCH] );
+	vr_gun_yaw.SetValue( ang[YAW] );
+	vr_gun_roll.SetValue( ang[ROLL] );
+}
+
+void CClientVirtualReality::UpdateGunTransform()
+{
+	if ( m_bCalibGrabbing )
+	{
+		// Calibrating: the free hand carries the gun model.
+		ConcatTransforms( m_WorldFromHand[GetFreeHand()], m_FreeFromGunModel, m_WorldFromGunModel );
+		return;
+	}
+	matrix3x4_t gripFromModel;
+	GetGripFromGunModel( gripFromModel );
+	ConcatTransforms( m_WorldFromHand[GetGunHand()], gripFromModel, m_WorldFromGunModel );
 }
 
 bool CClientVirtualReality::GetGunAim( Vector &origin, Vector &direction ) const
 {
-	const int hand = GetGunHand();
-	matrix3x4_t barrel;
-	GetGunBarrelTransform( m_WorldFromHand[hand], barrel );
+	Vector vecAimInModel;
+	AngleVectors( QAngle( vr_gun_aim_pitch.GetFloat(), vr_gun_aim_yaw.GetFloat(), 0.0f ), &vecAimInModel );
+	VectorRotate( vecAimInModel, m_WorldFromGunModel, direction );
+	VectorTransform( s_vecGunMuzzleInModel * vr_gun_scale.GetFloat(), m_WorldFromGunModel, origin );
+	return m_bHandValid[GetGunHand()];
+}
 
-	MatrixGetColumn( barrel, 0, direction );
-	Vector vecHandle;
-	MatrixGetColumn( barrel, 3, vecHandle );
-	origin = vecHandle + direction * vr_aim_offset_forward.GetFloat();
-	return m_bHandValid[hand];
+//-----------------------------------------------------------------------------
+// Places the gun from SteamVR's "grip limit" skeleton: a fist closed around the
+// controller. The barrel runs along the back of the hand (wrist -> knuckles), the
+// handle down through the fist (index -> pinky), and the gun sits on top of the fist.
+//-----------------------------------------------------------------------------
+bool CClientVirtualReality::AutoPlaceGun( bool bVerbose )
+{
+	const int hand = GetGunHand();
+	matrix3x4_t bones[VR_SKELETON_BONE_COUNT];
+	if ( !g_PortalVR.GetGripFromFistSkeleton( hand, bones ) )
+	{
+		if ( bVerbose )
+			VRLog( "vr_gun_autoplace: no hand skeleton for the gun hand yet" );
+		return false;
+	}
+
+	Vector pos[VR_SKELETON_BONE_COUNT];
+	for ( int b = 0; b < VR_SKELETON_BONE_COUNT; b++ )
+		MatrixGetColumn( bones[b], 3, pos[b] );
+
+	const Vector &vecWrist = pos[1];
+	const Vector &vecIndexKnuckle = pos[7];
+	const Vector &vecPinkyKnuckle = pos[22];
+	Vector vecKnuckles = ( pos[7] + pos[12] + pos[17] + pos[22] ) * 0.25f;
+	Vector vecFistCenter = ( pos[7] + pos[12] + pos[17] + pos[22] + pos[9] + pos[14] + pos[19] + pos[24] ) * 0.125f;
+
+	Vector vecUp = vecIndexKnuckle - vecPinkyKnuckle;
+	if ( VectorNormalize( vecUp ) < 0.1f )
+		return false;
+	Vector vecForward = vecKnuckles - vecWrist;
+	vecForward -= vecUp * DotProduct( vecForward, vecUp );
+	if ( VectorNormalize( vecForward ) < 0.1f )
+		return false;
+	Vector vecLeft = CrossProduct( vecUp, vecForward );
+
+	// Barrel center line above the fist: the gun body's radius is about 6 units.
+	Vector vecOrigin = vecFistCenter + vecUp * ( DotProduct( vecIndexKnuckle - vecFistCenter, vecUp ) + 5.8f );
+
+	matrix3x4_t gripFromModel;
+	MatrixInitialize( gripFromModel, vecOrigin, vecForward, vecLeft, vecUp );
+	SetGripFromGunModel( gripFromModel );
+	m_bGunAutoPlaced = true;
+	VRLog( "Gun placed from the hand skeleton: vr_gun_x %.2f vr_gun_y %.2f vr_gun_z %.2f vr_gun_pitch %.1f vr_gun_yaw %.1f vr_gun_roll %.1f",
+		vr_gun_x.GetFloat(), vr_gun_y.GetFloat(), vr_gun_z.GetFloat(), vr_gun_pitch.GetFloat(), vr_gun_yaw.GetFloat(), vr_gun_roll.GetFloat() );
+	return true;
+}
+
+void CClientVirtualReality::SetGunCalibration( bool bOn )
+{
+	if ( bOn == m_bCalibrating )
+		return;
+	m_bCalibrating = bOn;
+	m_bCalibGrabbing = false;
+	m_flCalibHintTime = 0.0f;
+	VRLog( "Gun calibration %s", bOn ? "started" : "ended" );
+	if ( !bOn && internalCenterPrint )
+		internalCenterPrint->Clear();
+}
+
+void CClientVirtualReality::SaveGunCalibration()
+{
+	vr_gun_calibrated.SetValue( 1 );
+	char szCfg[1024];
+	Q_snprintf( szCfg, sizeof( szCfg ),
+		"// Portal VR gun placement, saved by vr_gun_calibrate (render model: %s)\n"
+		"vr_gun_x %.3f\nvr_gun_y %.3f\nvr_gun_z %.3f\nvr_gun_pitch %.2f\nvr_gun_yaw %.2f\nvr_gun_roll %.2f\n"
+		"vr_gun_aim_pitch %.2f\nvr_gun_aim_yaw %.2f\nvr_gun_calibrated 1\n",
+		g_PortalVR.GetRenderModelName( GetGunHand() ),
+		vr_gun_x.GetFloat(), vr_gun_y.GetFloat(), vr_gun_z.GetFloat(), vr_gun_pitch.GetFloat(), vr_gun_yaw.GetFloat(), vr_gun_roll.GetFloat(),
+		vr_gun_aim_pitch.GetFloat(), vr_gun_aim_yaw.GetFloat() );
+	FileHandle_t fh = g_pFullFileSystem->Open( "cfg/vr_gun_calibration.cfg", "w", "MOD" );
+	if ( fh )
+	{
+		g_pFullFileSystem->Write( szCfg, Q_strlen( szCfg ), fh );
+		g_pFullFileSystem->Close( fh );
+	}
+	VRLog( "Gun calibration saved: %s", szCfg );
+	engine->ClientCmd_Unrestricted( "host_writeconfig\n" );
+}
+
+//-----------------------------------------------------------------------------
+// Calibration controls (both hands):
+//   free-hand grip (hold) - pick the gun model up with the free hand; let go to put it
+//                           back on the gun hand at that spot
+//   A                     - save and finish
+//   B                     - reset to the skeleton placement
+//   both grips + right stick click - start/stop calibrating
+//-----------------------------------------------------------------------------
+void CClientVirtualReality::UpdateGunCalibration()
+{
+	const int gunHand = GetGunHand();
+	const int freeHand = GetFreeHand();
+
+	// Combo to start/stop without the console.
+	if ( g_PortalVR.GetDigital( VRACTION_HAND_GRAB, VR_HAND_LEFT ).bDown && g_PortalVR.GetDigital( VRACTION_HAND_GRAB, VR_HAND_RIGHT ).bDown
+		 && g_PortalVR.GetDigitalAny( VRACTION_RECENTER ).bPressed )
+	{
+		SetGunCalibration( !m_bCalibrating );
+		return;
+	}
+
+	// Without a calibration, place the gun from the hand skeleton as soon as there is one.
+	if ( !m_bCalibrating && !vr_gun_calibrated.GetBool() && !m_bGunAutoPlaced )
+		AutoPlaceGun( false );
+
+	if ( !m_bCalibrating )
+		return;
+
+	if ( internalCenterPrint && gpGlobals->realtime > m_flCalibHintTime )
+	{
+		m_flCalibHintTime = gpGlobals->realtime + 1.5f;
+		internalCenterPrint->Print( (wchar_t *)L"GUN CALIBRATION\nHold your gun hand naturally.\nFree hand: hold GRIP to grab the gun, release to drop it on your gun hand.\nRight stick: turn the aim laser    A = save    B = reset" );
+	}
+
+	const VRDigitalState_t &grab = g_PortalVR.GetDigital( VRACTION_HAND_GRAB, freeHand );
+	if ( grab.bPressed && !m_bCalibGrabbing )
+	{
+		matrix3x4_t freeFromWorld;
+		MatrixInvert( m_WorldFromHand[freeHand], freeFromWorld );
+		ConcatTransforms( freeFromWorld, m_WorldFromGunModel, m_FreeFromGunModel );
+		m_bCalibGrabbing = true;
+		g_PortalVR.TriggerHaptic( freeHand, 0.03f, 120.0f, 0.4f );
+	}
+	else if ( !grab.bDown && m_bCalibGrabbing )
+	{
+		// Put it on the gun hand where it was let go.
+		matrix3x4_t gunFromWorld, gripFromModel;
+		MatrixInvert( m_WorldFromHand[gunHand], gunFromWorld );
+		ConcatTransforms( gunFromWorld, m_WorldFromGunModel, gripFromModel );
+		SetGripFromGunModel( gripFromModel );
+		m_bCalibGrabbing = false;
+		g_PortalVR.TriggerHaptic( gunHand, 0.03f, 120.0f, 0.4f );
+		VRLog( "Gun moved: vr_gun_x %.2f vr_gun_y %.2f vr_gun_z %.2f vr_gun_pitch %.1f vr_gun_yaw %.1f vr_gun_roll %.1f",
+			vr_gun_x.GetFloat(), vr_gun_y.GetFloat(), vr_gun_z.GetFloat(), vr_gun_pitch.GetFloat(), vr_gun_yaw.GetFloat(), vr_gun_roll.GetFloat() );
+	}
+
+	if ( m_bCalibGrabbing )
+		return;
+
+	// Right stick turns the aim direction (shown by the aim laser) relative to the model.
+	Vector2D vecStick = g_PortalVR.GetTurnStick();
+	const float flRate = vr_gun_aim_adjust_speed.GetFloat() * gpGlobals->frametime;
+	if ( fabsf( vecStick.x ) > 0.3f )
+		vr_gun_aim_yaw.SetValue( AngleNormalize( vr_gun_aim_yaw.GetFloat() - vecStick.x * flRate ) );
+	if ( fabsf( vecStick.y ) > 0.3f )
+		vr_gun_aim_pitch.SetValue( clamp( vr_gun_aim_pitch.GetFloat() - vecStick.y * flRate, -45.0f, 45.0f ) );
+
+	if ( g_PortalVR.GetDigitalAny( VRACTION_JUMP ).bPressed )
+	{
+		SaveGunCalibration();
+		g_PortalVR.TriggerHaptic( gunHand, 0.1f, 80.0f, 0.6f );
+		SetGunCalibration( false );
+		if ( internalCenterPrint )
+			internalCenterPrint->Print( (wchar_t *)L"Gun placement saved" );
+	}
+	else if ( g_PortalVR.GetDigital( VRACTION_CROUCH, VR_HAND_RIGHT ).bPressed )
+	{
+		vr_gun_aim_pitch.Revert();
+		vr_gun_aim_yaw.Revert();
+		if ( !AutoPlaceGun( true ) )
+		{
+			vr_gun_x.Revert(); vr_gun_y.Revert(); vr_gun_z.Revert();
+			vr_gun_pitch.Revert(); vr_gun_yaw.Revert(); vr_gun_roll.Revert();
+		}
+	}
+}
+
+//-----------------------------------------------------------------------------
+// Hand-held gun model (models/vr/portalgun_rtx.mdl, built by tools/gunmodel).
+// Its three claws are bones ("prong_top", "prong_left", "prong_right", pivots at
+// their bases); they are opened procedurally here after the normal bone setup.
+//-----------------------------------------------------------------------------
+ConVar vr_gun_anim( "vr_gun_anim", "1", FCVAR_ARCHIVE, "Animate the hand-held gun (claws, recoil) and make it glow in the portal colors." );
+
+static const char *s_pszProngBones[3] = { "prong_top", "prong_left", "prong_right" };
+// Direction of each claw away from the barrel (model space): it opens away from the axis.
+static const Vector s_vecProngRadial[3] = { Vector( 0.0f, -0.165f, 0.986f ), Vector( 0.0f, 0.716f, -0.698f ), Vector( 0.0f, -0.787f, -0.617f ) };
+
+class C_VRGunModel : public C_BaseAnimating
+{
+public:
+	DECLARE_CLASS( C_VRGunModel, C_BaseAnimating );
+
+	C_VRGunModel()
+	{
+		for ( int i = 0; i < 3; i++ )
+		{
+			m_flProngAngle[i] = 0.0f;
+			m_nProngBone[i] = -2;
+		}
+	}
+
+	virtual void BuildTransformations( CStudioHdr *pStudioHdr, Vector *pos, Quaternion q[], const matrix3x4_t &cameraTransform, int boneMask, CBoneBitList &boneComputed )
+	{
+		BaseClass::BuildTransformations( pStudioHdr, pos, q, cameraTransform, boneMask, boneComputed );
+
+		for ( int i = 0; i < 3; i++ )
+		{
+			if ( m_nProngBone[i] == -2 )
+				m_nProngBone[i] = LookupBone( s_pszProngBones[i] );
+			const int nBone = m_nProngBone[i];
+			if ( nBone < 0 || m_flProngAngle[i] == 0.0f )
+				continue;
+
+			// Rotate the bone around its own origin (the claw's hinge) about the axis that
+			// swings the claw away from the barrel: barrel x radial.
+			Vector vecAxis;
+			VectorRotate( CrossProduct( Vector( 1, 0, 0 ), s_vecProngRadial[i] ), cameraTransform, vecAxis );
+			VectorNormalize( vecAxis );
+
+			matrix3x4_t &bone = GetBoneForWrite( nBone );
+			Vector vecPivot, vecRotatedPivot;
+			MatrixGetColumn( bone, 3, vecPivot );
+			matrix3x4_t rot, result;
+			MatrixBuildRotationAboutAxis( vecAxis, m_flProngAngle[i], rot );
+			VectorRotate( vecPivot, rot, vecRotatedPivot );
+			MatrixSetColumn( vecPivot - vecRotatedPivot, 3, rot );
+			ConcatTransforms( rot, bone, result );
+			MatrixCopy( result, bone );
+		}
+	}
+
+	float	m_flProngAngle[3];	// degrees, + = open
+	int		m_nProngBone[3];	// -2 = not looked up yet
+};
+
+// Portal colors (the in-game portal tints).
+static const Vector s_vecGlowBlue( 0.25f, 0.62f, 1.0f );
+static const Vector s_vecGlowOrange( 1.0f, 0.6f, 0.12f );
+static const Vector s_vecGlowIdle( 0.45f, 0.5f, 0.55f );
+
+//-----------------------------------------------------------------------------
+// Gun animation state: fire kick (detected from the weapon's next-attack time
+// jumping forward), claws open while holding something, portal-colored glow.
+//-----------------------------------------------------------------------------
+void CClientVirtualReality::UpdateGunAnimation( C_BasePlayer *pPlayer, C_BaseAnimating *pGunEntity, matrix3x4_t &worldFromModel )
+{
+	C_VRGunModel *pGun = dynamic_cast<C_VRGunModel *>( pGunEntity );
+	if ( !pGun )
+		return;
+
+	float flKick = 0.0f;
+	bool bHolding = false;
+	Vector vecColor = s_vecGlowIdle;
+#ifdef PORTAL
+	C_WeaponPortalgun *pWeapon = dynamic_cast<C_WeaponPortalgun *>( pPlayer->GetActiveWeapon() );
+	if ( pWeapon )
+	{
+		const float flNextAttack = pWeapon->m_flNextPrimaryAttack;
+		if ( flNextAttack > m_flGunLastNextAttack + 0.05f && flNextAttack > gpGlobals->curtime )
+			m_flGunFireTime = gpGlobals->realtime;
+		m_flGunLastNextAttack = flNextAttack;
+
+		bHolding = pWeapon->IsHoldingObject();
+		if ( bHolding && !m_bGunWasHolding )
+			m_flGunFireTime = gpGlobals->realtime - 0.1f;	// a smaller kick when grabbing
+		m_bGunWasHolding = bHolding;
+
+		const int nLast = pWeapon->GetLastFiredPortal();
+		if ( nLast == 1 )
+			vecColor = s_vecGlowBlue;
+		else if ( nLast == 2 )
+			vecColor = s_vecGlowOrange;
+		else if ( pWeapon->CanFirePortal1() )
+			vecColor = s_vecGlowBlue * 0.6f;
+	}
+#endif
+	if ( !vr_gun_anim.GetBool() )
+	{
+		for ( int i = 0; i < 3; i++ )
+			pGun->m_flProngAngle[i] = 0.0f;
+		return;
+	}
+
+	const float flSinceFire = gpGlobals->realtime - m_flGunFireTime;
+	if ( flSinceFire >= 0.0f && flSinceFire < 0.3f )
+	{
+		const float t = 1.0f - flSinceFire / 0.3f;
+		flKick = t * t;
+	}
+
+	// Claws: open while holding (with the jitter of the real gun), flick on every shot.
+	const float flTarget = bHolding ? 1.0f : 0.0f;
+	m_flGunHoldBlend = Approach( flTarget, m_flGunHoldBlend, gpGlobals->frametime * 6.0f );
+	for ( int i = 0; i < 3; i++ )
+	{
+		float flJitter = m_flGunHoldBlend * 1.5f * sinf( gpGlobals->realtime * 31.0f + i * 2.1f );
+		pGun->m_flProngAngle[i] = m_flGunHoldBlend * 18.0f + flKick * 14.0f + flJitter;
+	}
+
+	// Recoil: back and up a little, around the grip.
+	if ( flKick > 0.0f )
+	{
+		matrix3x4_t recoil, result;
+		AngleMatrix( QAngle( -6.0f * flKick, 0.0f, 0.0f ), Vector( -1.5f * flKick, 0.0f, 0.0f ), recoil );
+		ConcatTransforms( worldFromModel, recoil, result );
+		MatrixCopy( result, worldFromModel );
+	}
+
+	// Glow: the core / indicator lights (self-illum mask) and the glass tube.
+	const float flBright = 1.0f + 1.5f * flKick + 0.4f * m_flGunHoldBlend;
+	m_vecGunGlow = vecColor * flBright;
+	if ( !m_pGunMaterial )
+	{
+		m_pGunMaterial = materials->FindMaterial( "models/vr/portalgun_rtx/portalgun_rtx", TEXTURE_GROUP_MODEL, false );
+		m_pGunGlassMaterial = materials->FindMaterial( "models/vr/portalgun_rtx/portalgun_rtx_glass", TEXTURE_GROUP_MODEL, false );
+		if ( m_pGunMaterial )
+			m_pGunMaterial->IncrementReferenceCount();
+		if ( m_pGunGlassMaterial )
+			m_pGunGlassMaterial->IncrementReferenceCount();
+	}
+	bool bFound;
+	if ( m_pGunMaterial )
+	{
+		IMaterialVar *pVar = m_pGunMaterial->FindVar( "$selfillumtint", &bFound, false );
+		if ( bFound )
+			pVar->SetVecValue( m_vecGunGlow.x * 1.6f, m_vecGunGlow.y * 1.6f, m_vecGunGlow.z * 1.6f );
+	}
+	if ( m_pGunGlassMaterial )
+	{
+		IMaterialVar *pVar = m_pGunGlassMaterial->FindVar( "$color2", &bFound, false );
+		if ( bFound )
+			pVar->SetVecValue( m_vecGunGlow.x * 0.8f, m_vecGunGlow.y * 0.8f, m_vecGunGlow.z * 0.8f );
+	}
+}
+
+// Soft glow in the gun's core, drawn with the world overlays.
+void CClientVirtualReality::DrawGunGlow()
+{
+	C_BaseEntity *pGun = m_hGunModel.Get();
+	if ( !pGun || pGun->IsEffectActive( EF_NODRAW ) || !vr_gun_anim.GetBool() || !m_pGlowMaterial )
+		return;
+
+	Vector vecCore;
+	VectorTransform( Vector( 12.0f, 0.0f, 0.0f ) * vr_gun_scale.GetFloat(), m_WorldFromGunModel, vecCore );
+	const float flSize = 2.2f * vr_gun_scale.GetFloat() * ( 1.0f + 0.6f * ( m_vecGunGlow.Length() - 1.0f ) );
+	Vector vecToEye = CurrentViewOrigin() - vecCore;
+	VectorNormalize( vecToEye );
+	Vector vecRight = CrossProduct( vecToEye, Vector( 0, 0, 1 ) );
+	if ( VectorNormalize( vecRight ) < 0.01f )
+		vecRight.Init( 0, 1, 0 );
+	Vector vecUp = CrossProduct( vecRight, vecToEye );
+	vecRight *= flSize;
+	vecUp *= flSize;
+
+	unsigned char color[4] = { (unsigned char)clamp( (int)( m_vecGunGlow.x * 200 ), 0, 255 ), (unsigned char)clamp( (int)( m_vecGunGlow.y * 200 ), 0, 255 ),
+							   (unsigned char)clamp( (int)( m_vecGunGlow.z * 200 ), 0, 255 ), 255 };
+	CMatRenderContextPtr pRenderContext( materials );
+	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, m_pGlowMaterial );
+	CMeshBuilder meshBuilder;
+	meshBuilder.Begin( pMesh, MATERIAL_QUADS, 1 );
+	meshBuilder.Position3fv( ( vecCore - vecRight - vecUp ).Base() ); meshBuilder.Color4ubv( color ); meshBuilder.TexCoord2f( 0, 0, 1 ); meshBuilder.AdvanceVertex();
+	meshBuilder.Position3fv( ( vecCore - vecRight + vecUp ).Base() ); meshBuilder.Color4ubv( color ); meshBuilder.TexCoord2f( 0, 0, 0 ); meshBuilder.AdvanceVertex();
+	meshBuilder.Position3fv( ( vecCore + vecRight + vecUp ).Base() ); meshBuilder.Color4ubv( color ); meshBuilder.TexCoord2f( 0, 1, 0 ); meshBuilder.AdvanceVertex();
+	meshBuilder.Position3fv( ( vecCore + vecRight - vecUp ).Base() ); meshBuilder.Color4ubv( color ); meshBuilder.TexCoord2f( 0, 1, 1 ); meshBuilder.AdvanceVertex();
+	meshBuilder.End();
+	pMesh->Draw();
+}
+
+C_BaseEntity *CClientVirtualReality::GetGunModelEntity() const
+{
+	C_BaseEntity *pGun = m_hGunModel.Get();
+	return ( pGun && !pGun->IsEffectActive( EF_NODRAW ) ) ? pGun : NULL;
+}
+
+//-----------------------------------------------------------------------------
+// The gun is a client-side model in the world (not the view model), so it sits
+// exactly where the hand is in both eyes and through portals.
+//-----------------------------------------------------------------------------
+void CClientVirtualReality::UpdateGunModel( C_BasePlayer *pPlayer )
+{
+	bool bShow = pPlayer->IsAlive() && !pPlayer->GetVehicle() && m_bHandValid[GetGunHand()];
+#ifdef PORTAL
+	bShow = bShow && ( m_bCalibrating || dynamic_cast<C_WeaponPortalgun *>( pPlayer->GetActiveWeapon() ) != NULL );
+#endif
+
+	C_BaseAnimating *pGun = dynamic_cast<C_BaseAnimating *>( m_hGunModel.Get() );
+	if ( !pGun )
+	{
+		if ( !bShow )
+			return;
+		static bool s_bWarned = false;
+		if ( modelinfo->GetModelIndex( vr_gun_model.GetString() ) < 0 )
+		{
+			if ( !s_bWarned )
+				VRLog( "Gun model %s is not precached", vr_gun_model.GetString() );
+			s_bWarned = true;
+			return;
+		}
+		pGun = new C_VRGunModel;
+		if ( !pGun->InitializeAsClientEntity( vr_gun_model.GetString(), RENDER_GROUP_OPAQUE_ENTITY ) )
+		{
+			pGun->Release();
+			return;
+		}
+		m_hGunModel = pGun;
+	}
+
+	if ( !bShow )
+	{
+		pGun->AddEffects( EF_NODRAW );
+		return;
+	}
+	pGun->RemoveEffects( EF_NODRAW );
+
+	matrix3x4_t worldFromModel;
+	MatrixCopy( m_WorldFromGunModel, worldFromModel );
+	UpdateGunAnimation( pPlayer, pGun, worldFromModel );	// may add recoil to the drawn pose
+
+	Vector vecOrigin;
+	QAngle angles;
+	MatrixAngles( worldFromModel, angles, vecOrigin );
+	pGun->SetAbsOrigin( vecOrigin );
+	pGun->SetAbsAngles( angles );
+	if ( pGun->GetModelScale() != vr_gun_scale.GetFloat() )
+		pGun->SetModelScale( vr_gun_scale.GetFloat() );
+	pGun->InvalidateBoneCache();
+	ClientLeafSystem()->RenderableChanged( pGun->RenderHandle() );
 }
 
 //-----------------------------------------------------------------------------
@@ -354,6 +1020,7 @@ bool CClientVirtualReality::ProcessCurrentTrackingState( float fGameFOV )
 	VPROF_BUDGET( "CClientVirtualReality::ProcessCurrentTrackingState", "VR" );
 
 	g_PortalVR.BeginFrame();
+	RunDelayedCommands();
 
 	C_BasePlayer *pPlayer = C_BasePlayer::GetLocalPlayer();
 	if ( !pPlayer )
@@ -362,8 +1029,31 @@ bool CClientVirtualReality::ProcessCurrentTrackingState( float fGameFOV )
 	if ( !m_bTrackingInitialized )
 		InitTracking( pPlayer );
 
+	if ( vr_test_cfg.GetString()[0] && pPlayer->IsAlive() )
+	{
+		if ( m_flTestStartTime < 0.0f )
+			m_flTestStartTime = gpGlobals->realtime;
+		else if ( m_flTestStartTime > 0.0f && gpGlobals->realtime - m_flTestStartTime > vr_test_delay.GetFloat() )
+		{
+			m_flTestStartTime = 0.0f;	// once per map
+			engine->ClientCmd_Unrestricted( VarArgs( "exec %s\n", vr_test_cfg.GetString() ) );
+		}
+	}
+
 	UpdateWorldPoses( pPlayer );
-	UpdateMenu();
+	if ( !( vr_dbg_skip.GetInt() & 8 ) )
+		UpdateMenu();
+	if ( !( vr_dbg_skip.GetInt() & 1 ) )
+		UpdateGunCalibration();
+	UpdateGunTransform();
+	if ( !( vr_dbg_skip.GetInt() & 2 ) )
+		UpdateGunModel( pPlayer );
+
+	if ( vr_log_eye.GetBool() )
+	{
+		Vector vecEye = pPlayer->GetAbsOrigin() + m_vecHeadOffset;
+		VRLog( "eye %.3f %.3f %.3f origin z %.3f frametime %.4f", vecEye.x, vecEye.y, vecEye.z, pPlayer->GetAbsOrigin().z, gpGlobals->frametime );
+	}
 
 	// The player's eye angles are the HMD: CalcView, EyeAngles(), sound, and the portal
 	// eye-through-portal logic all read them.
@@ -471,6 +1161,7 @@ void CClientVirtualReality::PostProcessFrame( StereoEye_t eEye )
 	if ( !UseVR() )
 		return;
 
+	g_PortalVR.ResolveEye( eEye == STEREO_EYE_LEFT ? ISourceVirtualReality::VREye_Left : ISourceVirtualReality::VREye_Right );
 	if ( eEye == STEREO_EYE_RIGHT )
 		g_PortalVR.SubmitFrame();
 }
@@ -514,6 +1205,28 @@ void CClientVirtualReality::CreateMaterials()
 	pKV->SetInt( "$nofog", 1 );
 	m_pLaserMaterial = materials->CreateMaterial( "__vr_laser", pKV );
 	m_pLaserMaterial->IncrementReferenceCount();
+
+	pKV = new KeyValues( "UnlitGeneric" );
+	pKV->SetInt( "$vertexcolor", 1 );
+	pKV->SetInt( "$nocull", 1 );
+	m_pControllerMaterial = materials->CreateMaterial( "__vr_controller", pKV );
+	m_pControllerMaterial->IncrementReferenceCount();
+
+	pKV = new KeyValues( "UnlitGeneric" );
+	pKV->SetInt( "$vertexcolor", 1 );
+	pKV->SetInt( "$nocull", 1 );
+	pKV->SetInt( "$nofog", 1 );
+	m_pOverlayMaterial = materials->CreateMaterial( "__vr_overlay", pKV );
+	m_pOverlayMaterial->IncrementReferenceCount();
+
+	pKV = new KeyValues( "UnlitGeneric" );
+	pKV->SetString( "$basetexture", "sprites/glow01" );
+	pKV->SetInt( "$vertexcolor", 1 );
+	pKV->SetInt( "$additive", 1 );
+	pKV->SetInt( "$nocull", 1 );
+	pKV->SetInt( "$nofog", 1 );
+	m_pGlowMaterial = materials->CreateMaterial( "__vr_gunglow", pKV );
+	m_pGlowMaterial->IncrementReferenceCount();
 }
 
 void CClientVirtualReality::DrawMirror( int nWidth, int nHeight )
@@ -546,6 +1259,11 @@ void CClientVirtualReality::DrawMirror( int nWidth, int nHeight )
 
 void CClientVirtualReality::LevelShutdown()
 {
+	if ( m_hGunModel.Get() )
+		m_hGunModel->Release();
+	m_hGunModel = NULL;
+	m_bCalibGrabbing = false;
+	m_flTestStartTime = -1.0f;
 	g_PortalVR.SetLoading( true );
 	m_bTrackingInitialized = false;	// re-align with the player's facing in the next map
 }
@@ -646,6 +1364,209 @@ void CClientVirtualReality::DrawLaser()
 }
 
 //-----------------------------------------------------------------------------
+// World overlays: SteamVR controller models, hand skeletons, calibration axes
+//-----------------------------------------------------------------------------
+static void AddSegment( CMeshBuilder &meshBuilder, const Vector &a, const Vector &b, float flWidth, const unsigned char *color );
+
+static bool ShowOverlay( const ConVar &var, bool bCalibrating )
+{
+	return var.GetInt() == 1 || ( var.GetInt() == 2 && bCalibrating );
+}
+
+void CClientVirtualReality::DrawWorldOverlays()
+{
+	if ( !UseVR() || !m_bTrackingInitialized || ( vr_dbg_skip.GetInt() & 4 ) )
+		return;
+	C_BasePlayer *pPlayer = C_BasePlayer::GetLocalPlayer();
+	if ( !pPlayer || !pPlayer->IsAlive() )
+		return;
+
+	CreateMaterials();
+	CMatRenderContextPtr pRenderContext( materials );
+	pRenderContext->MatrixMode( MATERIAL_MODEL );
+	pRenderContext->PushMatrix();
+	pRenderContext->LoadIdentity();
+
+	if ( ShowOverlay( vr_show_controllers, m_bCalibrating ) )
+		DrawControllerModels();
+	DrawGunGlow();
+	if ( ShowOverlay( vr_show_skeleton, m_bCalibrating ) )
+		DrawSkeletons();
+	if ( m_bCalibrating )
+	{
+		DrawAxes( m_WorldFromHand[GetGunHand()], 4.0f );
+		DrawAxes( m_WorldFromGunModel, 3.0f );
+
+		// Aim laser: where portals will go.
+		Vector vecAimStart, vecAimDir;
+		GetGunAim( vecAimStart, vecAimDir );
+		static const unsigned char s_Laser[4] = { 255, 220, 60, 255 };
+		IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, m_pOverlayMaterial );
+		CMeshBuilder meshBuilder;
+		meshBuilder.Begin( pMesh, MATERIAL_QUADS, 1 );
+		AddSegment( meshBuilder, vecAimStart, vecAimStart + vecAimDir * 400.0f, 0.2f, s_Laser );
+		meshBuilder.End();
+		pMesh->Draw();
+	}
+
+	pRenderContext->MatrixMode( MATERIAL_MODEL );
+	pRenderContext->PopMatrix();
+}
+
+void CClientVirtualReality::ReleaseControllerModels()
+{
+	for ( int i = 0; i < VR_HAND_COUNT; i++ )
+	{
+		ControllerModel_t &model = m_ControllerModel[i];
+		if ( model.pMesh )
+		{
+			CMatRenderContextPtr pRenderContext( materials );
+			pRenderContext->DestroyStaticMesh( model.pMesh );
+		}
+		model.pMesh = NULL;
+		model.nState = 0;
+		model.szName[0] = 0;
+	}
+}
+
+void CClientVirtualReality::DrawControllerModels()
+{
+	CMatRenderContextPtr pRenderContext( materials );
+	for ( int i = 0; i < VR_HAND_COUNT; i++ )
+	{
+		ControllerModel_t &model = m_ControllerModel[i];
+		const char *pszName = g_PortalVR.GetRenderModelName( i );
+		if ( Q_strcmp( pszName, model.szName ) )
+		{
+			if ( model.pMesh )
+				pRenderContext->DestroyStaticMesh( model.pMesh );
+			model.pMesh = NULL;
+			model.nState = pszName[0] ? 1 : 0;
+			Q_strncpy( model.szName, pszName, sizeof( model.szName ) );
+		}
+
+		if ( model.nState == 1 )
+		{
+			CUtlVector<VRRenderModelVertex_t> verts;
+			CUtlVector<unsigned short> indices;
+			int nResult = g_PortalVR.LoadRenderModel( model.szName, verts, indices );
+			if ( nResult < 0 || ( nResult > 0 && ( verts.Count() == 0 || verts.Count() > 65535 ) ) )
+			{
+				model.nState = -1;
+			}
+			else if ( nResult > 0 )
+			{
+				model.pMesh = pRenderContext->CreateStaticMesh( VERTEX_POSITION | VERTEX_NORMAL | VERTEX_COLOR | VERTEX_TEXCOORD_SIZE( 0, 2 ),
+					TEXTURE_GROUP_STATIC_VERTEX_BUFFER_OTHER, m_pControllerMaterial );
+				CMeshBuilder meshBuilder;
+				meshBuilder.Begin( model.pMesh, MATERIAL_TRIANGLES, verts.Count(), indices.Count() );
+				for ( int v = 0; v < verts.Count(); v++ )
+				{
+					meshBuilder.Position3fv( verts[v].pos.Base() );
+					meshBuilder.Normal3fv( verts[v].normal.Base() );
+					meshBuilder.Color4ubv( verts[v].color );
+					meshBuilder.TexCoord2f( 0, 0.0f, 0.0f );
+					meshBuilder.AdvanceVertex();
+				}
+				for ( int n = 0; n < indices.Count(); n++ )
+				{
+					meshBuilder.Index( indices[n] );
+					meshBuilder.AdvanceIndex();
+				}
+				meshBuilder.End();
+				model.nState = 2;
+			}
+		}
+
+		const VRTrackedPose_t &device = g_PortalVR.GetDevicePose( i );
+		if ( model.nState != 2 || !device.bValid )
+			continue;
+
+		matrix3x4_t worldFromDevice;
+		TrackingToWorld( device.mat, m_vecPoseOrigin, worldFromDevice );
+		pRenderContext->MatrixMode( MATERIAL_MODEL );
+		pRenderContext->LoadMatrix( worldFromDevice );
+		pRenderContext->Bind( m_pControllerMaterial );
+		model.pMesh->Draw();
+	}
+	pRenderContext->MatrixMode( MATERIAL_MODEL );
+	pRenderContext->LoadIdentity();
+}
+
+// Thin quads facing the viewer.
+static void AddSegment( CMeshBuilder &meshBuilder, const Vector &a, const Vector &b, float flWidth, const unsigned char *color )
+{
+	Vector vecDir = b - a;
+	Vector vecToEye = CurrentViewOrigin() - a;
+	Vector vecSide = CrossProduct( vecDir, vecToEye );
+	if ( VectorNormalize( vecSide ) < 1e-4f )
+		vecSide.Init( 0, 0, 1 );
+	vecSide *= flWidth * 0.5f;
+	meshBuilder.Position3fv( ( a - vecSide ).Base() ); meshBuilder.Color4ubv( color ); meshBuilder.TexCoord2f( 0, 0, 0 ); meshBuilder.AdvanceVertex();
+	meshBuilder.Position3fv( ( a + vecSide ).Base() ); meshBuilder.Color4ubv( color ); meshBuilder.TexCoord2f( 0, 1, 0 ); meshBuilder.AdvanceVertex();
+	meshBuilder.Position3fv( ( b + vecSide ).Base() ); meshBuilder.Color4ubv( color ); meshBuilder.TexCoord2f( 0, 1, 1 ); meshBuilder.AdvanceVertex();
+	meshBuilder.Position3fv( ( b - vecSide ).Base() ); meshBuilder.Color4ubv( color ); meshBuilder.TexCoord2f( 0, 0, 1 ); meshBuilder.AdvanceVertex();
+}
+
+void CClientVirtualReality::DrawSkeletons()
+{
+	CMatRenderContextPtr pRenderContext( materials );
+	for ( int i = 0; i < VR_HAND_COUNT; i++ )
+	{
+		const matrix3x4_t *pBones = g_PortalVR.GetSkeleton( i );
+		if ( !pBones )
+			continue;
+
+		Vector pos[VR_SKELETON_BONE_COUNT];
+		for ( int b = 0; b < VR_SKELETON_BONE_COUNT; b++ )
+		{
+			matrix3x4_t world;
+			TrackingToWorld( pBones[b], m_vecPoseOrigin, world );
+			MatrixGetColumn( world, 3, pos[b] );
+		}
+
+		static const unsigned char s_Color[VR_HAND_COUNT][4] = { { 80, 200, 255, 255 }, { 255, 160, 40, 255 } };
+		IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, m_pOverlayMaterial );
+		CMeshBuilder meshBuilder;
+		meshBuilder.Begin( pMesh, MATERIAL_QUADS, VR_SKELETON_BONE_COUNT );
+		int nQuads = 0;
+		for ( int b = 2; b < VR_SKELETON_BONE_COUNT; b++ )
+		{
+			int nParent = CPortalVR::GetSkeletonBoneParent( b );
+			if ( nParent < 1 )
+				continue;
+			AddSegment( meshBuilder, pos[nParent], pos[b], 0.3f, s_Color[i] );
+			nQuads++;
+		}
+		// Fill the rest of the reserved quads with degenerate ones.
+		for ( ; nQuads < VR_SKELETON_BONE_COUNT; nQuads++ )
+			AddSegment( meshBuilder, pos[1], pos[1], 0.0f, s_Color[i] );
+		meshBuilder.End();
+		pMesh->Draw();
+	}
+}
+
+void CClientVirtualReality::DrawAxes( const matrix3x4_t &world, float flLength )
+{
+	static const unsigned char s_Axis[3][4] = { { 255, 40, 40, 255 }, { 40, 255, 40, 255 }, { 60, 60, 255, 255 } };
+	Vector vecOrigin;
+	MatrixGetColumn( world, 3, vecOrigin );
+
+	CMatRenderContextPtr pRenderContext( materials );
+	IMesh *pMesh = pRenderContext->GetDynamicMesh( true, NULL, NULL, m_pOverlayMaterial );
+	CMeshBuilder meshBuilder;
+	meshBuilder.Begin( pMesh, MATERIAL_QUADS, 3 );
+	for ( int a = 0; a < 3; a++ )
+	{
+		Vector vecAxis;
+		MatrixGetColumn( world, a, vecAxis );
+		AddSegment( meshBuilder, vecOrigin, vecOrigin + vecAxis * flLength, 0.25f, s_Axis[a] );
+	}
+	meshBuilder.End();
+	pMesh->Draw();
+}
+
+//-----------------------------------------------------------------------------
 // Menus: the menu button opens/closes the pause menu; the gun hand is a laser
 // pointer on the menu panel and its trigger clicks.
 //-----------------------------------------------------------------------------
@@ -668,11 +1589,8 @@ void CClientVirtualReality::UpdateMenu()
 	}
 
 	const int hand = GetGunHand();
-	matrix3x4_t barrel;
-	GetGunBarrelTransform( m_WorldFromHand[hand], barrel );
 	Vector vecDir, vecStart;
-	MatrixGetColumn( barrel, 0, vecDir );
-	MatrixGetColumn( barrel, 3, vecStart );
+	GetGunAim( vecStart, vecDir );
 	m_vecPointerStart = vecStart;
 	m_vecPointerEnd = vecStart + vecDir * 200.0f;
 
@@ -727,18 +1645,9 @@ void CClientVirtualReality::OverrideViewModelTransform( Vector &vmorigin, QAngle
 	if ( !UseVR() )
 		return;
 
-	// Place the model so its handle bone is at the grip and its barrel points along it:
-	// worldFromModel = worldFromBarrel * inverse( modelFromBarrel )
-	matrix3x4_t barrel;
-	GetGunBarrelTransform( m_WorldFromHand[GetGunHand()], barrel );
-
-	matrix3x4_t modelFromBarrel, barrelFromModel, worldFromModel;
-	AngleMatrix( s_angGunBarrelInModel, s_vecGunHandleInModel, modelFromBarrel );
-	MatrixInvert( modelFromBarrel, barrelFromModel );
-	ConcatTransforms( barrel, barrelFromModel, worldFromModel );
-
-	MatrixGetColumn( worldFromModel, 3, vmorigin );
-	MatrixAngles( worldFromModel, vmangles );
+	// The view model isn't drawn in VR (the hand-held gun is a world model, see
+	// UpdateGunModel), but its attachments still anchor weapon effects: keep it on the gun.
+	MatrixAngles( m_WorldFromGunModel, vmangles, vmorigin );
 }
 
 bool CClientVirtualReality::OverrideWeaponHudAimVectors( Vector *pAimOrigin, Vector *pAimDirection )
@@ -790,7 +1699,7 @@ void CClientVirtualReality::CreateMove( float flFrametime, CUserCmd *cmd )
 		return;
 
 	C_BasePlayer *pPlayer = C_BasePlayer::GetLocalPlayer();
-	if ( !pPlayer || !m_bTrackingInitialized )
+	if ( !pPlayer || !m_bTrackingInitialized || ( vr_dbg_skip.GetInt() & 32 ) )
 		return;
 
 	g_PortalVR.UpdateInput();
@@ -804,6 +1713,8 @@ void CClientVirtualReality::CreateMove( float flFrametime, CUserCmd *cmd )
 	// Turning
 	//
 	Vector2D vecTurn = g_PortalVR.GetTurnStick();
+	if ( m_bCalibrating )
+		vecTurn.Init();	// the right stick turns the aim while calibrating
 	if ( vr_turn_mode.GetInt() == 0 )
 	{
 		if ( fabsf( vecTurn.x ) > 0.7f )
@@ -824,7 +1735,8 @@ void CClientVirtualReality::CreateMove( float flFrametime, CUserCmd *cmd )
 		ApplyTurn( -vecTurn.x * vr_smooth_turn_speed.GetFloat() * flFrametime );
 	}
 
-	if ( g_PortalVR.GetDigitalAny( VRACTION_RECENTER ).bPressed )
+	const bool bBothGrips = g_PortalVR.GetDigital( VRACTION_HAND_GRAB, VR_HAND_LEFT ).bDown && g_PortalVR.GetDigital( VRACTION_HAND_GRAB, VR_HAND_RIGHT ).bDown;
+	if ( g_PortalVR.GetDigitalAny( VRACTION_RECENTER ).bPressed && !bBothGrips )	// both grips + stick click = gun calibration
 		Recenter();
 
 	//
@@ -886,6 +1798,10 @@ void CClientVirtualReality::CreateMove( float flFrametime, CUserCmd *cmd )
 	cmd->viewangles = m_angHead;
 	engine->SetViewAngles( m_angHead );
 
+	// Calibrating the gun: the controllers belong to the calibration, not the game.
+	if ( m_bCalibrating )
+		return;
+
 	//
 	// Smooth locomotion (added to any keyboard movement)
 	//
@@ -924,24 +1840,20 @@ void CClientVirtualReality::CreateMove( float flFrametime, CUserCmd *cmd )
 		cmd->buttons |= IN_ATTACK;
 	if ( g_PortalVR.GetDigital( VRACTION_FIRE_PORTAL2, gunHand ).bDown )
 		cmd->buttons |= IN_ATTACK2;
-	if ( g_PortalVR.GetDigitalAny( VRACTION_JUMP ).bDown )
+	// Everything that acts on the game comes from the gun hand; the free hand only walks.
+	if ( g_PortalVR.GetDigital( VRACTION_JUMP, gunHand ).bDown )
 		cmd->buttons |= IN_JUMP;
 
-	if ( g_PortalVR.GetDigitalAny( VRACTION_CROUCH ).bPressed )
+	if ( g_PortalVR.GetDigital( VRACTION_CROUCH, gunHand ).bPressed )
 		m_bCrouchToggled = !m_bCrouchToggled;
-	bool bPhysicalCrouch = hmd.bValid && hmd.mat[2][3] < vr_crouch_height.GetFloat();
-	if ( m_bCrouchToggled || bPhysicalCrouch )
+	bool bPhysicalCrouch = hmd.bValid && GetHeadHeight() < vr_crouch_height.GetFloat();
+	m_bDuckRequested = m_bCrouchToggled || bPhysicalCrouch;
+	if ( m_bDuckRequested )
 		cmd->buttons |= IN_DUCK;
 
-	const bool bHandGrab = g_PortalVR.GetDigital( VRACTION_HAND_GRAB, freeHand ).bDown;
-	const bool bGunGrab = g_PortalVR.GetDigital( VRACTION_GUN_GRAB, gunHand ).bDown;
-	const bool bUse = g_PortalVR.GetDigital( VRACTION_USE, freeHand ).bDown;
-	if ( bHandGrab )
-		vr.buttons |= VRBTN_HAND_GRAB;
-	if ( bGunGrab )
+	// Gun grip: pick up / press buttons along the gun, press again to drop (server toggles).
+	if ( g_PortalVR.GetDigital( VRACTION_GUN_GRAB, gunHand ).bDown )
 		vr.buttons |= VRBTN_GUN_GRAB;
-	if ( bUse )
-		vr.buttons |= VRBTN_USE;
 
 
 	//

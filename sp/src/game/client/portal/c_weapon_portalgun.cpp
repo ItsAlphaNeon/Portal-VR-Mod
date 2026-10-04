@@ -17,6 +17,7 @@
 #include "rumble_shared.h"
 
 #include "weapon_portalgun_shared.h"
+#include "sourcevr/isourcevirtualreality.h"
 
 
 #define	SPRITE_SCALE 128.0f
@@ -983,6 +984,10 @@ int C_WeaponPortalgun::DrawModel( int flags )
 		DrawEffects( true );
 		return 1;
 	}*/
+
+	// Portal VR: the local player's gun is the hand-held model (CClientVirtualReality).
+	if ( UseVR() && IsCarriedByLocalPlayer() )
+		return 0;
 
 	int iRetValue = BaseClass::DrawModel( flags );
 

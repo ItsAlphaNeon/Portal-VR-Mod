@@ -40,6 +40,8 @@
 #endif
 
 #include "debugoverlay_shared.h"
+#include "sourcevr/isourcevirtualreality.h"
+#include "client_virtualreality.h"
 
 
 LINK_ENTITY_TO_CLASS( prop_portal, C_Prop_Portal );
@@ -375,6 +377,45 @@ void C_Prop_Portal::Simulate()
 
 			EHANDLE hEnt = pEntity;
 			m_hGhostingEntities.AddToTail( hEnt );
+		}
+	}
+
+	// Portal VR: the hand-held gun is a client-only model (no movetype, not simulated by the
+	// portal), so it is added here when it reaches into the portal hole: the part behind the
+	// portal is clipped off and a ghost comes out of the linked portal, like a held object.
+	C_BaseEntity *pVRGun = UseVR() ? g_ClientVirtualReality.GetGunModelEntity() : NULL;
+	if ( pVRGun && pLocalPlayer )
+	{
+		Vector vForward, vRight, vUp;
+		GetVectors( &vForward, &vRight, &vUp );
+		const Vector ptOrigin = GetNetworkOrigin();
+
+		Vector vMins, vMaxs;
+		pVRGun->GetRenderBounds( vMins, vMaxs );
+		const matrix3x4_t &matGun = pVRGun->RenderableToWorldTransform();
+		float fMin = FLT_MAX, fMax = -FLT_MAX;
+		for ( int c = 0; c < 8; c++ )
+		{
+			Vector vCorner( ( c & 1 ) ? vMaxs.x : vMins.x, ( c & 2 ) ? vMaxs.y : vMins.y, ( c & 4 ) ? vMaxs.z : vMins.z ), vWorld;
+			VectorTransform( vCorner, matGun, vWorld );
+			float fDist = vForward.Dot( vWorld - ptOrigin );
+			fMin = MIN( fMin, fDist );
+			fMax = MAX( fMax, fDist );
+		}
+		Vector vCenter;
+		VectorTransform( ( vMins + vMaxs ) * 0.5f, matGun, vCenter );
+		Vector vLocal = vCenter - ptOrigin;
+		const bool bInHole = fabs( vRight.Dot( vLocal ) ) < PORTAL_HALF_WIDTH && fabs( vUp.Dot( vLocal ) ) < PORTAL_HALF_HEIGHT;
+		const bool bEyeInFront = vForward.Dot( pLocalPlayer->EyePosition() - ptOrigin ) > -4.0f;
+
+		if ( bInHole && bEyeInFront && fMin < 0.0f && fMax > -40.0f )
+		{
+			pVRGun->m_bEnableRenderingClipPlane = true;
+			pVRGun->m_fRenderingClipPlane[0] = m_plane_Origin.normal.x;
+			pVRGun->m_fRenderingClipPlane[1] = m_plane_Origin.normal.y;
+			pVRGun->m_fRenderingClipPlane[2] = m_plane_Origin.normal.z;
+			pVRGun->m_fRenderingClipPlane[3] = m_plane_Origin.dist - 0.3f;
+			m_hGhostingEntities.AddToTail( EHANDLE( pVRGun ) );
 		}
 	}
 

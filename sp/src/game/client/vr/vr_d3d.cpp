@@ -538,3 +538,112 @@ const char *VRD3D_GetStatus()
 		s_szStatus, s_nHookCalls, s_nRTCalls, s_szLastRTs );
 	return szFull;
 }
+
+//-----------------------------------------------------------------------------
+// Crash logger
+//-----------------------------------------------------------------------------
+#include <psapi.h>
+#pragma comment( lib, "psapi.lib" )
+
+static int s_nLoggedCrashes = 0;
+
+static void DescribeAddress( DWORD_PTR addr, char *pszOut, int nOutSize )
+{
+	HMODULE hMod = NULL;
+	if ( GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)addr, &hMod ) && hMod )
+	{
+		char szPath[MAX_PATH];
+		GetModuleFileNameA( hMod, szPath, sizeof( szPath ) );
+		const char *pszName = strrchr( szPath, '\\' );
+		_snprintf_s( pszOut, nOutSize, _TRUNCATE, "%s+0x%X", pszName ? pszName + 1 : szPath, (unsigned)( addr - (DWORD_PTR)hMod ) );
+	}
+	else
+	{
+		_snprintf_s( pszOut, nOutSize, _TRUNCATE, "0x%08X", (unsigned)addr );
+	}
+	pszOut[nOutSize - 1] = 0;
+}
+
+static bool IsCodeAddress( DWORD_PTR addr )
+{
+	MEMORY_BASIC_INFORMATION mbi;
+	if ( !VirtualQuery( (LPCVOID)addr, &mbi, sizeof( mbi ) ) || mbi.State != MEM_COMMIT || mbi.Type != MEM_IMAGE )
+		return false;
+	return ( mbi.Protect & ( PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY ) ) != 0;
+}
+
+struct CrashFile_t { HANDLE h; };
+static void CrashPrintf( CrashFile_t *fp, const char *pszFmt, ... )
+{
+	char szBuf[1024];
+	va_list args;
+	va_start( args, pszFmt );
+	int n = _vsnprintf_s( szBuf, sizeof( szBuf ), _TRUNCATE, pszFmt, args );
+	va_end( args );
+	if ( n < 0 )
+		n = (int)strlen( szBuf );
+	DWORD dwWritten;
+	WriteFile( fp->h, szBuf, n, &dwWritten, NULL );
+}
+
+static LONG CALLBACK VRCrashHandler( PEXCEPTION_POINTERS pInfo )
+{
+	DWORD code = pInfo->ExceptionRecord->ExceptionCode;
+	if ( code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_INT_DIVIDE_BY_ZERO
+		 && code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_PRIV_INSTRUCTION && code != 0xC0000409 /* stack buffer overrun */ )
+		return EXCEPTION_CONTINUE_SEARCH;
+	if ( s_nLoggedCrashes >= 4 )
+		return EXCEPTION_CONTINUE_SEARCH;
+	s_nLoggedCrashes++;
+
+	char szFolder[MAX_PATH], szPath[MAX_PATH];
+	VRD3D_GetClientDllFolder( szFolder, sizeof( szFolder ) );
+	_snprintf_s( szPath, sizeof( szPath ), _TRUNCATE, "%s\\..\\vr_crash.txt", szFolder );
+	HANDLE hFile = CreateFileA( szPath, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL );
+	if ( hFile == INVALID_HANDLE_VALUE )
+		return EXCEPTION_CONTINUE_SEARCH;
+	CrashFile_t file = { hFile };
+	CrashFile_t *fp = &file;
+
+	char szWhere[MAX_PATH + 32];
+	DescribeAddress( (DWORD_PTR)pInfo->ExceptionRecord->ExceptionAddress, szWhere, sizeof( szWhere ) );
+	CrashPrintf( fp, "=== exception 0x%08X at %s", (unsigned)code, szWhere );
+	if ( code == EXCEPTION_ACCESS_VIOLATION && pInfo->ExceptionRecord->NumberParameters >= 2 )
+		CrashPrintf( fp, " (%s 0x%08X)", pInfo->ExceptionRecord->ExceptionInformation[0] ? "write" : "read", (unsigned)pInfo->ExceptionRecord->ExceptionInformation[1] );
+	CrashPrintf( fp, "\n" );
+#ifdef _M_IX86
+	const CONTEXT *ctx = pInfo->ContextRecord;
+	CrashPrintf( fp, "eax %08X ebx %08X ecx %08X edx %08X esi %08X edi %08X ebp %08X esp %08X\n",
+		ctx->Eax, ctx->Ebx, ctx->Ecx, ctx->Edx, ctx->Esi, ctx->Edi, ctx->Ebp, ctx->Esp );
+	// Likely return addresses on the stack.
+	const DWORD_PTR *pStack = (const DWORD_PTR *)ctx->Esp;
+	int nFound = 0;
+	for ( int i = 0; i < 2048 && nFound < 40; i++ )
+	{
+		DWORD_PTR value;
+		__try { value = pStack[i]; }
+		__except ( EXCEPTION_EXECUTE_HANDLER ) { break; }
+		if ( IsCodeAddress( value ) )
+		{
+			DescribeAddress( value, szWhere, sizeof( szWhere ) );
+			CrashPrintf( fp, "  [esp+%04X] %s\n", i * 4, szWhere );
+			nFound++;
+		}
+	}
+#endif
+	CloseHandle( hFile );
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
+void VRD3D_InstallCrashLogger()
+{
+	static bool s_bInstalled = false;
+	if ( s_bInstalled )
+		return;
+	s_bInstalled = true;
+	// Leave room on this (the main) thread's stack to log a stack overflow.
+	ULONG ulGuarantee = 128 * 1024;
+	SetThreadStackGuarantee( &ulGuarantee );
+	AddVectoredExceptionHandler( 1, VRCrashHandler );
+}
+

@@ -80,6 +80,9 @@ void CHudCrosshair::ApplySchemeSettings( IScheme *scheme )
 //-----------------------------------------------------------------------------
 bool CHudCrosshair::ShouldDraw( void )
 {
+	// Portal VR: no screen-space reticle in VR (it can't be placed per eye).
+	if ( UseVR() )
+		return false;
 	bool bNeedsDraw;
 
 	if ( m_bHideCrosshair )

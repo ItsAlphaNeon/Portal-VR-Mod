@@ -23,7 +23,10 @@
 
 class CUserCmd;
 class C_BasePlayer;
+class C_BaseAnimating;
+class C_BaseEntity;
 class IMaterial;
+class IMesh;
 
 enum HeadtrackMovementMode_t
 {
@@ -121,8 +124,15 @@ public:
 	// Draws the left eye into the desktop window.
 	void DrawMirror( int nWidth, int nHeight );
 
-	// Re-center the play area on the player (hull under the head).
+	// Re-center the play area on the player (hull under the head). Seated: also re-measures height.
 	void Recenter();
+
+	// Seated mode: extra height added to the head so it stands at Chell's eye height.
+	float GetHeightOffset() const;
+	// Head height above the play area floor, including the seated offset.
+	float GetHeadHeight() const;
+	void MeasureSeatedHeight();
+	void UpdateDuckJumpOffset( C_BasePlayer *pPlayer );
 
 	// World pose of a hand's grip (valid after ProcessCurrentTrackingState this frame).
 	bool GetHandWorldPose( int hand, Vector &origin, QAngle &angles ) const;
@@ -133,6 +143,24 @@ public:
 	bool GetGunAim( Vector &origin, Vector &direction ) const;
 
 	float GetTrackingYaw() const { return m_flTrackingYaw; }
+	void DebugTurn( float flDegrees ) { ApplyTurn( flDegrees ); }
+
+	// World transform of the portal gun model (model space: +X along the barrel).
+	const matrix3x4_t &GetWorldFromGunModel() const { return m_WorldFromGunModel; }
+
+	// Controller models, hand skeletons and calibration helpers, drawn into the current
+	// eye's view (called from CViewRender::DrawViewModels with the 3D view pushed).
+	void DrawWorldOverlays();
+
+	// Gun placement calibration: the free hand grabs the gun model and puts it where it
+	// feels right on the gun hand; A saves it.
+	void SetGunCalibration( bool bOn );
+	bool IsCalibratingGun() const { return m_bCalibrating; }
+	// Places the gun on the gun hand from SteamVR's hand skeleton (fist around the controller).
+	bool AutoPlaceGun( bool bVerbose );
+
+	// The hand-held gun entity while it is shown (NULL otherwise). Portals ghost it.
+	C_BaseEntity *GetGunModelEntity() const;
 
 private:
 	void UpdateWorldPoses( C_BasePlayer *pPlayer );
@@ -143,6 +171,17 @@ private:
 	void CreateMaterials();
 	void UpdateMenu();				// menu button + laser pointer on the menu panel
 	void DrawLaser();
+	void UpdateGunTransform();
+	void UpdateGunModel( C_BasePlayer *pPlayer );
+	void UpdateGunAnimation( C_BasePlayer *pPlayer, C_BaseAnimating *pGun, matrix3x4_t &worldFromModel );
+	void DrawGunGlow();
+	void UpdateGunCalibration();
+	void SaveGunCalibration();
+	void DrawControllerModels();
+	void DrawSkeletons();
+	void DrawAxes( const matrix3x4_t &world, float flLength );
+	void ReleaseControllerModels();
+	bool GetPortalLerpRotation( Quaternion &q ) const;
 
 	// Play space placement: world yaw of tracking space, and the tracking-space point
 	// (z = 0) that sits under the player's hull center.
@@ -156,6 +195,46 @@ private:
 	bool			m_bHandValid[VR_HAND_COUNT];
 	Vector			m_vecHeadOffset;		// world-oriented offset of the head from the player's origin
 	QAngle			m_angHead;
+	Vector			m_vecPoseOrigin;		// player origin the world poses were computed with
+	float			m_flTestStartTime;
+	float			m_flDuckJumpOffset;		// see UpdateDuckJumpOffset
+	bool			m_bDuckRequested;		// this command asked to duck (button or real crouch)		// vr_test_cfg: -1 = waiting for spawn, 0 = done
+
+	// vr_portal_view_mode 1: extra rotation after a portal that settles back to level
+	bool			m_bPortalLerpActive;
+	matrix3x4_t		m_matPortalLerp;		// this frame's extra rotation (around the head)
+	Quaternion		m_qPortalLerpStart;
+	float			m_flPortalLerpStartTime;
+
+	// Portal gun
+	matrix3x4_t		m_WorldFromGunModel;
+	EHANDLE			m_hGunModel;
+	bool			m_bGunAutoPlaced;
+	bool			m_bCalibrating;
+	bool			m_bCalibGrabbing;		// the free hand is holding the gun model
+	matrix3x4_t		m_FreeFromGunModel;
+	float			m_flCalibHintTime;
+
+	// SteamVR controller render models
+	struct ControllerModel_t
+	{
+		char		szName[128];
+		int			nState;					// 0 = not loaded, 1 = loading, 2 = ready, -1 = failed
+		IMesh		*pMesh;
+	};
+	ControllerModel_t m_ControllerModel[VR_HAND_COUNT];
+	IMaterial		*m_pControllerMaterial;
+	IMaterial		*m_pOverlayMaterial;
+	IMaterial		*m_pGlowMaterial;
+
+	// Gun animation / glow
+	IMaterial		*m_pGunMaterial;
+	IMaterial		*m_pGunGlassMaterial;
+	float			m_flGunFireTime;
+	float			m_flGunLastNextAttack;
+	float			m_flGunHoldBlend;
+	bool			m_bGunWasHolding;
+	Vector			m_vecGunGlow;
 
 	// HUD panel
 	VMatrix			m_WorldFromHud;

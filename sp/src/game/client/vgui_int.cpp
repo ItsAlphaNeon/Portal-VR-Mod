@@ -24,6 +24,7 @@
 #include "filesystem.h"
 #include "matsys_controls/matsyscontrols.h"
 #include <portal/IModSettingsPanel.h>
+#include "vr/vr_settingspanel.h"
 
 #ifdef SIXENSE
 #include "sixense/in_sixense.h"
@@ -204,6 +205,7 @@ void VGui_CreateGlobalPanels( void )
 
 	VPANEL GameUiDll = enginevgui->GetPanel(PANEL_GAMEUIDLL);
 	modsettingspanel->Create(GameUiDll);
+	VRSettingsPanel_Create(GameUiDll);
 
 #if defined( TRACK_BLOCKING_IO )
 	VPANEL gameDLLPanel = enginevgui->GetPanel( PANEL_GAMEDLL );
@@ -234,6 +236,7 @@ void VGui_Shutdown()
 {
 	VGUI_DestroyClientDLLRootPanel();
 	modsettingspanel->Destroy();
+	VRSettingsPanel_Destroy();
 
 #ifndef _X360
 	MP3Player_Destroy();

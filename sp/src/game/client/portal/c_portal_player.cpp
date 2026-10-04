@@ -316,6 +316,10 @@ int C_Portal_Player::DrawModel( int flags )
 	if ( !m_bReadyToDraw )
 		return 0;
 
+	// Portal VR: no body. You are your controllers and the floating gun, also through portals.
+	if ( IsLocalPlayer() && UseVR() )
+		return 0;
+
 	if( IsLocalPlayer() )
 	{
 		if ( !C_BasePlayer::ShouldDrawThisPlayer() )

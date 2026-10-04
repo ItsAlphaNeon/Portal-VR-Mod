@@ -50,3 +50,7 @@ void *VRD3D_GetDevice();
 const char *VRD3D_GetStatus();
 
 #endif // VR_D3D_H
+
+// Debugging: logs fatal exceptions (address, module + offset, likely return addresses on
+// the stack) to <mod>\vr_crash.txt. Safe to call more than once.
+void VRD3D_InstallCrashLogger();

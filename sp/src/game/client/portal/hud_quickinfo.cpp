@@ -18,6 +18,7 @@
 #include "c_portal_player.h"
 #include "c_weapon_portalgun.h"
 #include "IGameUIFuncs.h"
+#include "sourcevr/isourcevirtualreality.h"
 
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
@@ -211,6 +212,9 @@ void CHUDQuickInfo::DrawWarning( int x, int y, CHudTexture *icon, float &time )
 //-----------------------------------------------------------------------------
 bool CHUDQuickInfo::ShouldDraw( void )
 {
+	// Portal VR: no screen-space reticle in VR (it can't be placed per eye).
+	if ( UseVR() )
+		return false;
 	if ( !m_icon_c || !m_icon_rb || !m_icon_rbe || !m_icon_lb || !m_icon_lbe )
 		return false;
 

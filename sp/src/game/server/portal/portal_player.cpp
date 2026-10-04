@@ -5,6 +5,7 @@
 //=============================================================================//
 
 #include "cbase.h"
+#include "filesystem.h"
 #include "portal_player.h"
 #include "trains.h"
 #include "weapon_portalgun.h"
@@ -13,6 +14,8 @@
 #include "prop_portal_shared.h"
 #include "vphysics/player_controller.h"
 #include "physicsshadowclone.h"
+#include "triggers.h"
+#include "collisionutils.h"
 
 LINK_ENTITY_TO_CLASS( player, CPortal_Player );
 
@@ -73,6 +76,11 @@ extern ConVar physicsshadowupdate_render;
 
 CPortal_Player::CPortal_Player()
 {
+	m_nVRGrabMode = VR_GRAB_NONE;
+	m_nVRPendingGrabMode = VR_GRAB_NONE;
+	m_nVRUseSource = VR_GRAB_NONE;
+	m_nVRPrevButtons = 0;
+	m_bVRGrabOffsetValid = false;
 	m_bHeldObjectOnOppositeSideOfPortal = false;
 	m_pHeldObjectPortal = 0;
 	m_bIntersectingPortalPlane = false;
@@ -96,6 +104,10 @@ void CPortal_Player::Precache( void )
 	PrecacheScriptSound( "PortalPlayer.FallRecover" );
 
 	PrecacheModel ( "sprites/glow01.vmt" );
+
+	// Portal VR: the hand-held gun model (drawn client-side, see client_virtualreality.cpp).
+	if ( filesystem->FileExists( "models/vr/portalgun_rtx.mdl", "GAME" ) )
+		PrecacheModel( "models/vr/portalgun_rtx.mdl" );
 
 	//PrecacheScriptSound( "NPC_Citizen.die" );
 }
@@ -1047,7 +1059,27 @@ bool CPortal_Player::GetVRAim( Vector &vecOrigin, Vector &vecDirection )
 	Vector vecEye = EyePosition();
 	UTIL_TraceLine( vecEye, vecOrigin, MASK_SOLID_BRUSHONLY, this, COLLISION_GROUP_NONE, &tr );
 	if ( tr.fraction < 1.0f )
+	{
 		vecOrigin = vecEye;
+		return true;
+	}
+
+	// Same for a fizzler (emancipation grid): reaching through one must not let the gun place
+	// portals on the far side. Firing from the eye sends the shot through the field, so it fizzles.
+	for ( CBaseEntity *pCleanser = gEntList.FindEntityByClassname( NULL, "trigger_portal_cleanser" ); pCleanser;
+		  pCleanser = gEntList.FindEntityByClassname( pCleanser, "trigger_portal_cleanser" ) )
+	{
+		CBaseTrigger *pTrigger = static_cast<CBaseTrigger *>( pCleanser );
+		if ( pTrigger->m_bDisabled )
+			continue;
+		Vector vecMins, vecMaxs;
+		pTrigger->CollisionProp()->WorldSpaceSurroundingBounds( &vecMins, &vecMaxs );
+		if ( IsBoxIntersectingRay( vecMins, vecMaxs, vecEye, vecOrigin - vecEye ) )
+		{
+			vecOrigin = vecEye;
+			break;
+		}
+	}
 	return true;
 }
 
@@ -1075,11 +1107,14 @@ bool CPortal_Player::GetVRHandMatrix( int hand, matrix3x4_t &worldFromHand )
 	return true;
 }
 
+static ConVar vr_dbg_skip_server( "vr_dbg_skip_server", "0", 0, "1 grab buttons, 2 VR aim" );
+
 void CPortal_Player::VRProcessGrabButtons( CUserCmd *ucmd )
 {
+	if ( vr_dbg_skip_server.GetInt() & 1 )
+		return;
 	const int nButtons = m_VRCmd.IsActive() ? m_VRCmd.buttons : 0;
 	const int nPressed = nButtons & ~m_nVRPrevButtons;
-	const int nReleased = m_nVRPrevButtons & ~nButtons;
 	m_nVRPrevButtons = nButtons;
 	m_nVRUseSource = VR_GRAB_NONE;
 	m_nVRPendingGrabMode = VR_GRAB_NONE;
@@ -1090,86 +1125,30 @@ void CPortal_Player::VRProcessGrabButtons( CUserCmd *ucmd )
 		return;
 	}
 
-	CBaseEntity *pHeld = GetPlayerHeldEntity( this );
-	if ( pHeld )
-	{
-		bool bDrop = false;
-		if ( m_nVRGrabMode == VR_GRAB_HAND && ( nReleased & VRBTN_HAND_GRAB ) )
-		{
-			bDrop = true;
-			m_hVRThrowObject = pHeld;
-		}
-		else if ( m_nVRGrabMode == VR_GRAB_GUN && ( nReleased & VRBTN_GUN_GRAB ) )
-		{
-			bDrop = true;
-		}
-		else if ( m_nVRGrabMode == VR_GRAB_NONE && ( nPressed & ( VRBTN_HAND_GRAB | VRBTN_GUN_GRAB ) ) )
-		{
-			bDrop = true; // picked up some other way (e.g. keyboard +use)
-		}
-
-		if ( bDrop )
-			ucmd->buttons |= IN_USE;	// a +use press while holding drops
+	// Only the gun hand interacts: its grip is a +use press aimed along the gun. Press it to
+	// pick something up (it floats in front of the barrel) or press a button; press again to drop.
+	if ( !( nPressed & VRBTN_GUN_GRAB ) )
 		return;
-	}
 
-	if ( nPressed & VRBTN_HAND_GRAB )
-	{
-		m_nVRUseSource = VR_GRAB_HAND;
-		m_nVRPendingGrabMode = VR_GRAB_HAND;
-		ucmd->buttons |= IN_USE;
-	}
-	else if ( nPressed & VRBTN_GUN_GRAB )
+	ucmd->buttons |= IN_USE;
+	if ( !GetPlayerHeldEntity( this ) )
 	{
 		m_nVRUseSource = VR_GRAB_GUN;
 		m_nVRPendingGrabMode = VR_GRAB_GUN;
-		ucmd->buttons |= IN_USE;
-	}
-	else if ( nPressed & VRBTN_USE )
-	{
-		m_nVRUseSource = VR_GRAB_HAND;
-		m_nVRPendingGrabMode = VR_GRAB_HAND;
-		ucmd->buttons |= IN_USE;
 	}
 }
 
 void CPortal_Player::VRFinishGrabButtons()
 {
+	if ( vr_dbg_skip_server.GetInt() & 1 )
+		return;
 	CBaseEntity *pHeld = GetPlayerHeldEntity( this );
 	if ( pHeld && m_nVRPendingGrabMode != VR_GRAB_NONE )
-	{
-		// Just picked something up with a VR grab.
-		m_nVRGrabMode = m_nVRPendingGrabMode;
-		m_bVRGrabOffsetValid = false;
-	}
+		m_nVRGrabMode = m_nVRPendingGrabMode;	// just picked something up with the gun
 	else if ( !pHeld )
-	{
 		m_nVRGrabMode = VR_GRAB_NONE;
-	}
 	m_nVRUseSource = VR_GRAB_NONE;
 	m_nVRPendingGrabMode = VR_GRAB_NONE;
-
-	// Throw: give the released object the hand's velocity.
-	CBaseEntity *pThrown = m_hVRThrowObject.Get();
-	m_hVRThrowObject = NULL;
-	if ( pThrown && !pHeld )
-	{
-		IPhysicsObject *pPhys = pThrown->VPhysicsGetObject();
-		const int hand = m_VRCmd.FreeHand();
-		if ( pPhys && m_VRCmd.IsHandValid( hand ) )
-		{
-			Vector vecVel = GetAbsVelocity() + m_VRCmd.handVelocity[hand] * vr_throw_scale.GetFloat();
-			float flSpeed = vecVel.Length();
-			if ( flSpeed > vr_throw_max_speed.GetFloat() )
-				vecVel *= vr_throw_max_speed.GetFloat() / flSpeed;
-
-			// Angular velocity is given in the object's local space.
-			Vector vecAngLocal;
-			VectorIRotate( m_VRCmd.handAngVelocity[hand], pThrown->EntityToWorldTransform(), vecAngLocal );
-			AngularImpulse angImpulse( vecAngLocal.x, vecAngLocal.y, vecAngLocal.z );
-			pPhys->SetVelocity( &vecVel, &angImpulse );
-		}
-	}
 }
 
 // Something the hand can use: a pickup-able physics object or a usable entity (button).
@@ -1222,9 +1201,17 @@ CBaseEntity *CPortal_Player::FindUseEntity( void )
 		Vector vecOrigin, vecDir;
 		if ( !GetVRAim( vecOrigin, vecDir ) )
 			return NULL;
+		// Exact aim first, then a fatter sweep so small things and buttons are easy to hit.
+		const Vector vecEnd = vecOrigin + vecDir * vr_gun_grab_distance.GetFloat();
 		trace_t tr;
-		UTIL_TraceLine( vecOrigin, vecOrigin + vecDir * vr_gun_grab_distance.GetFloat(), MASK_SOLID | CONTENTS_DEBRIS | CONTENTS_PLAYERCLIP, this, COLLISION_GROUP_NONE, &tr );
-		return ( tr.m_pEnt && VRIsUsable( tr.m_pEnt ) ) ? tr.m_pEnt : NULL;
+		UTIL_TraceLine( vecOrigin, vecEnd, MASK_SOLID | CONTENTS_DEBRIS | CONTENTS_PLAYERCLIP, this, COLLISION_GROUP_NONE, &tr );
+		if ( tr.m_pEnt && VRIsUsable( tr.m_pEnt ) )
+			return tr.m_pEnt;
+		const Vector vecHull( 6, 6, 6 );
+		UTIL_TraceHull( vecOrigin, vecEnd, -vecHull, vecHull, MASK_SOLID | CONTENTS_DEBRIS | CONTENTS_PLAYERCLIP, this, COLLISION_GROUP_NONE, &tr );
+		if ( tr.m_pEnt && VRIsUsable( tr.m_pEnt ) )
+			return tr.m_pEnt;
+		return NULL;
 	}
 
 	matrix3x4_t hand;

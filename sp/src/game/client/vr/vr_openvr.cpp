@@ -22,6 +22,12 @@ CPortalVR g_PortalVR;
 ConVar vr_world_scale( "vr_world_scale", "1.0", FCVAR_ARCHIVE, "Scale of the world relative to you. 1 = real-world scale (1 m = 39.37 units).", true, 0.5f, true, 2.0f );
 ConVar vr_debug( "vr_debug", "0", 0, "Print VR debug info to the console and vr_log.txt." );
 ConVar vr_timing( "vr_timing", "0", 0, "Log VR frame timing every 2 seconds." );
+ConVar vr_debug_fake_hands( "vr_debug_fake_hands", "0", 0, "Debug: put hands in front of the head when no controllers are tracked (null headset testing)." );
+ConVar vr_debug_fake_hand_pitch( "vr_debug_fake_hand_pitch", "0", 0 );
+ConVar vr_debug_fake_hand_yaw( "vr_debug_fake_hand_yaw", "0", 0 );
+ConVar vr_per_eye_targets( "vr_per_eye_targets", "1", 0, "Render each eye into its own target (needed for glass/refraction). 0 = old side-by-side path." );
+ConVar vr_debug_hmd_pitch( "vr_debug_hmd_pitch", "-999", 0, "Debug: force the headset pitch (degrees, -999 = off)." );
+ConVar vr_debug_fake_hand_forward( "vr_debug_fake_hand_forward", "14", 0 );
 
 // Frame timing (milliseconds, accumulated)
 static double s_flTimeWait, s_flTimeRender, s_flTimeGPU, s_flTimeSubmit, s_flFrameStart, s_flRenderStart, s_flLastReport;
@@ -82,6 +88,17 @@ static void VRMatrixToSource( const vr::HmdMatrix34_t &m, float flScale, matrix3
 	}
 }
 
+static void VRBoneToSource( const vr::VRBoneTransform_t &b, float flScale, matrix3x4_t &out )
+{
+	const float w = b.orientation.w, x = b.orientation.x, y = b.orientation.y, z = b.orientation.z;
+	vr::HmdMatrix34_t m;
+	m.m[0][0] = 1 - 2 * ( y * y + z * z ); m.m[0][1] = 2 * ( x * y - z * w );     m.m[0][2] = 2 * ( x * z + y * w );
+	m.m[1][0] = 2 * ( x * y + z * w );     m.m[1][1] = 1 - 2 * ( x * x + z * z ); m.m[1][2] = 2 * ( y * z - x * w );
+	m.m[2][0] = 2 * ( x * z - y * w );     m.m[2][1] = 2 * ( y * z + x * w );     m.m[2][2] = 1 - 2 * ( x * x + y * y );
+	m.m[0][3] = b.position.v[0]; m.m[1][3] = b.position.v[1]; m.m[2][3] = b.position.v[2];
+	VRMatrixToSource( m, flScale, out );
+}
+
 static void FillPose( VRTrackedPose_t &pose, const vr::TrackedDevicePose_t &src, float flScale )
 {
 	pose.bValid = src.bPoseIsValid && src.eTrackingResult == vr::TrackingResult_Running_OK;
@@ -106,6 +123,7 @@ CPortalVR::CPortalVR()
 	m_nEyeWidth = 1024;
 	m_nEyeHeight = 1024;
 	m_pEyeTexture = NULL;
+	m_pEyeRT[0] = m_pEyeRT[1] = NULL;
 	m_bInputReady = false;
 	m_nLastInputFrame = -1;
 	m_nSubmitErrors = 0;
@@ -117,6 +135,12 @@ CPortalVR::CPortalVR()
 	for ( int i = 0; i < VR_HAND_COUNT; i++ )
 	{
 		m_HandPose[i] = m_HmdPose;
+		m_DevicePose[i] = m_HmdPose;
+		m_SkeletonRoot[i] = m_HmdPose;
+		m_nDeviceIndex[i] = vr::k_unTrackedDeviceIndexInvalid;
+		m_szRenderModel[i][0] = 0;
+		m_bSkeletonValid[i] = false;
+		m_bSkeletonRootFromDevice[i] = false;
 		m_flGripSqueeze[i] = 0.0f;
 		for ( int f = 0; f < 5; f++ )
 			m_flFingerCurl[i][f] = 0.0f;
@@ -220,6 +244,21 @@ void CPortalVR::CreateRenderTargets( IMaterialSystem *pMaterialSystem )
 	if ( m_pEyeTexture )
 		m_pEyeTexture->IncrementReferenceCount();
 
+	// Each eye is rendered into its own eye-sized target and then copied into the shared
+	// texture above. Effects that copy "the frame buffer" for screen-space sampling (glass
+	// refraction, water, portal effects) then see exactly one eye, like on a monitor.
+	static const char *s_pszEyeRT[2] = { "_rt_vr_eye_left", "_rt_vr_eye_right" };
+	for ( int i = 0; i < 2; i++ )
+	{
+		m_pEyeRT[i] = pMaterialSystem->CreateNamedRenderTargetTextureEx2(
+			s_pszEyeRT[i], m_nEyeWidth, m_nEyeHeight, RT_SIZE_LITERAL,
+			IMAGE_FORMAT_BGRA8888, MATERIAL_RT_DEPTH_SEPARATE,
+			TEXTUREFLAGS_CLAMPS | TEXTUREFLAGS_CLAMPT | TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_NOLOD,
+			0 );
+		if ( m_pEyeRT[i] )
+			m_pEyeRT[i]->IncrementReferenceCount();
+	}
+
 	// The 2D UI (HUD, menus) is painted into this and drawn as a panel in the world.
 	ITexture *pGui = pMaterialSystem->CreateNamedRenderTargetTextureEx2(
 		"_rt_gui", 1, 1, RT_SIZE_FULL_FRAME_BUFFER,
@@ -239,18 +278,39 @@ void CPortalVR::ShutdownRenderTargets()
 		m_pEyeTexture->DecrementReferenceCount();
 		m_pEyeTexture = NULL;
 	}
+	for ( int i = 0; i < 2; i++ )
+	{
+		if ( m_pEyeRT[i] )
+			m_pEyeRT[i]->DecrementReferenceCount();
+		m_pEyeRT[i] = NULL;
+	}
 }
 
 ITexture *CPortalVR::GetRenderTarget( VREye eEye, EWhichRenderTarget eWhich )
 {
 	if ( eWhich == RT_Color )
-		return m_pEyeTexture;
+		return ( m_pEyeRT[eEye] && vr_per_eye_targets.GetBool() ) ? m_pEyeRT[eEye] : m_pEyeTexture;
 	return NULL; // the color target has its own (separate) depth buffer
+}
+
+// After an eye is rendered: copy its target into its half of the shared submit texture.
+void CPortalVR::ResolveEye( VREye eEye )
+{
+	if ( !m_pEyeRT[eEye] || !m_pEyeTexture || !vr_per_eye_targets.GetBool() )
+		return;
+	CMatRenderContextPtr pRenderContext( materials );
+	pRenderContext->PushRenderTargetAndViewport( m_pEyeRT[eEye] );
+	Rect_t src;
+	src.x = 0; src.y = 0; src.width = m_nEyeWidth; src.height = m_nEyeHeight;
+	Rect_t dst;
+	dst.x = ( eEye == VREye_Left ) ? 0 : m_nEyeWidth; dst.y = 0; dst.width = m_nEyeWidth; dst.height = m_nEyeHeight;
+	pRenderContext->CopyRenderTargetToTextureEx( m_pEyeTexture, 0, &src, &dst );
+	pRenderContext->PopRenderTargetAndViewport();
 }
 
 void CPortalVR::GetViewportBounds( VREye eEye, int *pnX, int *pnY, int *pnWidth, int *pnHeight )
 {
-	*pnX = ( eEye == VREye_Left ) ? 0 : m_nEyeWidth;
+	*pnX = ( eEye == VREye_Left || ( m_pEyeRT[eEye] && vr_per_eye_targets.GetBool() ) ) ? 0 : m_nEyeWidth;
 	*pnY = 0;
 	*pnWidth = m_nEyeWidth;
 	*pnHeight = m_nEyeHeight;
@@ -307,6 +367,8 @@ void CPortalVR::BeginFrame()
 	if ( !m_bActive || m_bFrameStarted )
 		return;
 
+	VRD3D_InstallCrashLogger();
+
 	// Eye offsets can change with the IPD dial and world scale.
 	const float flScale = UnitsPerMeter();
 	VRMatrixToSource( VRSys( m_pSystem )->GetEyeToHeadTransform( vr::Eye_Left ), flScale, m_HeadFromEye[VREye_Left] );
@@ -321,6 +383,15 @@ void CPortalVR::BeginFrame()
 		VRLog( "WaitGetPoses error %d", (int)eError );
 
 	FillPose( m_HmdPose, poses[vr::k_unTrackedDeviceIndex_Hmd], flScale );
+	if ( vr_debug_hmd_pitch.GetFloat() > -900.0f )
+	{
+		QAngle ang;
+		Vector pos;
+		MatrixAngles( m_HmdPose.mat, ang, pos );
+		ang[PITCH] = vr_debug_hmd_pitch.GetFloat();
+		ang[ROLL] = 0.0f;
+		AngleMatrix( ang, pos, m_HmdPose.mat );
+	}
 
 	UpdateInput();
 
@@ -333,11 +404,78 @@ void CPortalVR::BeginFrame()
 				 && data.bActive )
 			{
 				FillPose( m_HandPose[i], data.pose, flScale );
+
+				static ConVarRef vr_dbg_skip( "vr_dbg_skip" );
+				if ( vr_dbg_skip.GetInt() & 16 )
+					continue;
+				// The controller behind this pose: its raw pose and render model.
+				vr::InputOriginInfo_t info;
+				if ( vr::VRInput()->GetOriginTrackedDeviceInfo( data.activeOrigin, &info, sizeof( info ) ) == vr::VRInputError_None
+					 && info.trackedDeviceIndex < vr::k_unMaxTrackedDeviceCount )
+				{
+					FillPose( m_DevicePose[i], poses[info.trackedDeviceIndex], flScale );
+					if ( info.trackedDeviceIndex != m_nDeviceIndex[i] )
+					{
+						m_nDeviceIndex[i] = info.trackedDeviceIndex;
+						VRSys( m_pSystem )->GetStringTrackedDeviceProperty( info.trackedDeviceIndex, vr::Prop_RenderModelName_String, m_szRenderModel[i], sizeof( m_szRenderModel[i] ) );
+						VRLog( "Hand %d: device %u, render model '%s'", i, info.trackedDeviceIndex, m_szRenderModel[i] );
+					}
+				}
+				else
+				{
+					m_DevicePose[i].bValid = false;
+				}
 			}
 			else
 			{
 				m_HandPose[i].bValid = false;
+				m_DevicePose[i].bValid = false;
 			}
+
+			// Hand skeleton. Its bones are relative to the skeleton action's own pose; if the
+			// runtime doesn't give one, fall back to the controller's raw pose.
+			m_bSkeletonValid[i] = false;
+			vr::InputPoseActionData_t skel;
+			const bool bRoot = vr::VRInput()->GetPoseActionDataForNextFrame( m_hSkeleton[i], vr::TrackingUniverseStanding, &skel, sizeof( skel ), vr::k_ulInvalidInputValueHandle ) == vr::VRInputError_None
+				&& skel.bActive && skel.pose.bPoseIsValid;
+			if ( bRoot )
+				FillPose( m_SkeletonRoot[i], skel.pose, flScale );
+			else
+				m_SkeletonRoot[i] = m_DevicePose[i];
+			if ( bRoot == m_bSkeletonRootFromDevice[i] )
+			{
+				m_bSkeletonRootFromDevice[i] = !bRoot;
+				VRLog( "Hand %d: skeleton root from %s", i, bRoot ? "the skeleton action" : "the controller" );
+			}
+
+			vr::VRBoneTransform_t bones[VR_SKELETON_BONE_COUNT];
+			if ( m_SkeletonRoot[i].bValid && vr::VRInput()->GetSkeletalBoneData( m_hSkeleton[i], vr::VRSkeletalTransformSpace_Model,
+					vr::VRSkeletalMotionRange_WithController, bones, VR_SKELETON_BONE_COUNT ) == vr::VRInputError_None )
+			{
+				for ( int b = 0; b < VR_SKELETON_BONE_COUNT; b++ )
+				{
+					matrix3x4_t local;
+					VRBoneToSource( bones[b], flScale, local );
+					ConcatTransforms( m_SkeletonRoot[i].mat, local, m_SkeletonBones[i][b] );
+				}
+				m_bSkeletonValid[i] = true;
+			}
+		}
+	}
+
+	// Debug: without controllers (null headset), hold fake hands in front of the head.
+	if ( vr_debug_fake_hands.GetBool() && m_HmdPose.bValid )
+	{
+		for ( int i = 0; i < VR_HAND_COUNT; i++ )
+		{
+			if ( m_HandPose[i].bValid )
+				continue;
+			matrix3x4_t headFromHand;
+			AngleMatrix( QAngle( vr_debug_fake_hand_pitch.GetFloat(), vr_debug_fake_hand_yaw.GetFloat(), 0 ), Vector( vr_debug_fake_hand_forward.GetFloat(), i == VR_HAND_RIGHT ? -7.0f : 7.0f, -12.0f ), headFromHand );
+			ConcatTransforms( m_HmdPose.mat, headFromHand, m_HandPose[i].mat );
+			m_HandPose[i].bValid = true;
+			m_HandPose[i].vecVelocity.Init();
+			m_HandPose[i].vecAngVelocity.Init();
 		}
 	}
 
@@ -535,6 +673,104 @@ void CPortalVR::UpdateInput()
 	}
 }
 
+int CPortalVR::GetSkeletonBoneParent( int bone )
+{
+	if ( bone <= 0 || bone >= 26 )
+		return -1;		// root, aux bones
+	if ( bone == 1 )
+		return 0;		// wrist -> root
+	if ( bone == 2 || bone == 6 || bone == 11 || bone == 16 || bone == 21 )
+		return 1;		// finger bases -> wrist
+	return bone - 1;
+}
+
+bool CPortalVR::GetGripFromFistSkeleton( int hand, matrix3x4_t *pBones )
+{
+	if ( !m_bInputReady || !m_HandPose[hand].bValid || !m_SkeletonRoot[hand].bValid )
+		return false;
+	vr::VRBoneTransform_t bones[VR_SKELETON_BONE_COUNT];
+	if ( vr::VRInput()->GetSkeletalReferenceTransforms( m_hSkeleton[hand], vr::VRSkeletalTransformSpace_Model,
+			vr::VRSkeletalReferencePose_GripLimit, bones, VR_SKELETON_BONE_COUNT ) != vr::VRInputError_None )
+		return false;
+
+	matrix3x4_t gripFromTracking, gripFromRoot;
+	MatrixInvert( m_HandPose[hand].mat, gripFromTracking );
+	ConcatTransforms( gripFromTracking, m_SkeletonRoot[hand].mat, gripFromRoot );
+	const float flScale = UnitsPerMeter();
+	for ( int b = 0; b < VR_SKELETON_BONE_COUNT; b++ )
+	{
+		matrix3x4_t local;
+		VRBoneToSource( bones[b], flScale, local );
+		ConcatTransforms( gripFromRoot, local, pBones[b] );
+	}
+	return true;
+}
+
+int CPortalVR::LoadRenderModel( const char *pszName, CUtlVector<VRRenderModelVertex_t> &verts, CUtlVector<unsigned short> &indices )
+{
+	if ( !m_bActive || !pszName || !pszName[0] || !vr::VRRenderModels() )
+		return -1;
+
+	vr::RenderModel_t *pModel = NULL;
+	vr::EVRRenderModelError eError = vr::VRRenderModels()->LoadRenderModel_Async( pszName, &pModel );
+	if ( eError == vr::VRRenderModelError_Loading )
+		return 0;
+	if ( eError != vr::VRRenderModelError_None || !pModel )
+	{
+		VRLog( "Render model '%s' failed to load: %d", pszName, (int)eError );
+		return -1;
+	}
+
+	vr::RenderModel_TextureMap_t *pTexture = NULL;
+	if ( pModel->diffuseTextureId >= 0 )
+	{
+		eError = vr::VRRenderModels()->LoadTexture_Async( pModel->diffuseTextureId, &pTexture );
+		if ( eError == vr::VRRenderModelError_Loading )
+		{
+			vr::VRRenderModels()->FreeRenderModel( pModel );
+			return 0;
+		}
+		if ( eError != vr::VRRenderModelError_None )
+			pTexture = NULL;	// untextured is fine for a reference model
+	}
+	const bool bTextured = pTexture && pTexture->format == vr::VRRenderModelTextureFormat_RGBA8_SRGB;
+
+	const float flScale = UnitsPerMeter();
+	Vector vecLight( 0.3f, 0.4f, 0.85f );
+	VectorNormalize( vecLight );
+	verts.SetCount( pModel->unVertexCount );
+	for ( uint32 v = 0; v < pModel->unVertexCount; v++ )
+	{
+		const vr::RenderModel_Vertex_t &src = pModel->rVertexData[v];
+		VRRenderModelVertex_t &dst = verts[v];
+		dst.pos = VRVectorToSource( src.vPosition.v, flScale );
+		dst.normal = VRVectorToSource( src.vNormal.v, 1.0f );
+
+		int rgb[3] = { 150, 150, 155 };
+		if ( bTextured )
+		{
+			int x = clamp( (int)( src.rfTextureCoord[0] * pTexture->unWidth ), 0, pTexture->unWidth - 1 );
+			int y = clamp( (int)( src.rfTextureCoord[1] * pTexture->unHeight ), 0, pTexture->unHeight - 1 );
+			const uint8 *pTexel = pTexture->rubTextureMapData + ( y * pTexture->unWidth + x ) * 4;
+			rgb[0] = pTexel[0]; rgb[1] = pTexel[1]; rgb[2] = pTexel[2];
+		}
+		// Baked light from above so the shape reads without scene lighting.
+		float flShade = 0.45f + 0.55f * MAX( 0.0f, DotProduct( dst.normal, vecLight ) );
+		for ( int c = 0; c < 3; c++ )
+			dst.color[c] = (unsigned char)clamp( (int)( rgb[c] * flShade ), 0, 255 );
+		dst.color[3] = 255;
+	}
+	indices.SetCount( pModel->unTriangleCount * 3 );
+	for ( uint32 t = 0; t < pModel->unTriangleCount * 3; t++ )
+		indices[t] = pModel->rIndexData[t];
+
+	VRLog( "Render model '%s': %u vertices, %u triangles, %s", pszName, pModel->unVertexCount, pModel->unTriangleCount, bTextured ? "textured" : "untextured" );
+	if ( pTexture )
+		vr::VRRenderModels()->FreeTexture( pTexture );
+	vr::VRRenderModels()->FreeRenderModel( pModel );
+	return 1;
+}
+
 VRDigitalState_t CPortalVR::GetDigitalAny( VRAction_t action ) const
 {
 	VRDigitalState_t result;
@@ -567,7 +803,11 @@ void CPortalVR::PrintStatus()
 	}
 	Msg( "HMD valid %d  pos %.1f %.1f %.1f\n", m_HmdPose.bValid, m_HmdPose.mat[0][3], m_HmdPose.mat[1][3], m_HmdPose.mat[2][3] );
 	for ( int i = 0; i < VR_HAND_COUNT; i++ )
+	{
 		Msg( "Hand %d valid %d  pos %.1f %.1f %.1f\n", i, m_HandPose[i].bValid, m_HandPose[i].mat[0][3], m_HandPose[i].mat[1][3], m_HandPose[i].mat[2][3] );
+		Msg( "  controller device %u valid %d, render model '%s', skeleton %d (root from %s)\n", m_nDeviceIndex[i], m_DevicePose[i].bValid,
+			m_szRenderModel[i], m_bSkeletonValid[i], m_bSkeletonRootFromDevice[i] ? "controller" : "skeleton action" );
+	}
 }
 
 CON_COMMAND( vr_dump_eyes, "Save the last frame sent to the headset as vr_eyes.bmp in the mod folder" )
@@ -575,7 +815,7 @@ CON_COMMAND( vr_dump_eyes, "Save the last frame sent to the headset as vr_eyes.b
 	char szFolder[MAX_PATH];
 	VRD3D_GetClientDllFolder( szFolder, sizeof( szFolder ) );
 	char szPath[MAX_PATH];
-	Q_snprintf( szPath, sizeof( szPath ), "%s\\..\\vr_eyes.bmp", szFolder );
+	Q_snprintf( szPath, sizeof( szPath ), "%s\\..\\%s.bmp", szFolder, args.ArgC() > 1 ? args[1] : "vr_eyes" );
 	char szError[256];
 	if ( VRD3D_DumpSubmitTexture( szPath, szError, sizeof( szError ) ) )
 		VRLog( "Wrote %s", szPath );
