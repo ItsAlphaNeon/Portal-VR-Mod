@@ -4,7 +4,7 @@ A full 6DOF, standing-roomscale VR mod for the original **Portal (2007)**, built
 
 It runs on your own Steam copy of Portal **without changing any of its files**. It's a separate mod folder (`Portal\portalvr`) with its own `client.dll` and `server.dll`, rebuilt from [SonicEraZoR/Portal-Base](https://github.com/SonicEraZoR/Portal-Base) (the Portal 1 code ported to Source SDK 2013) with OpenVR built in.
 
-> Personal project, not for distribution. It builds on leaked Portal source code via Portal-Base. You need to own Portal on Steam.
+> Please be aware, this repository was 100% AI Generated as a benchmark for Claude Opus 5.5. Shockingly this experiment was a complete success, and is fully functional.
 
 ---
 
