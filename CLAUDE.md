@@ -6,7 +6,16 @@ This document is for the next agent working on this repo. Read it before changin
 
 Portal VR is a 6DOF roomscale VR mod for Portal (2007), using OpenVR/SteamVR. The user tests it on a **Steam Frame**; SteamVR reports its `controller_type` as `frame_controller`.
 
-- **Source of the game code:** client.dll and server.dll are rebuilt from Portal-Base (SonicEraZoR). That repo is the leaked Portal 1 code merged into the Source SDK 2013 SP HL2 projects. Its git remote here is `upstream`; our work is on branch `portalvr`, pushed to `origin` (ItsAlphaNeon/Portal-VR-Mod).
+- **Source of the game code:** client.dll and server.dll are rebuilt from Portal-Base (SonicEraZoR). That repo is the leaked Portal 1 code merged into the Source SDK 2013 SP HL2 projects. Our work is on branch `portalvr`, pushed to `origin` (ItsAlphaNeon/Portal-VR-Mod).
+- **The repo is pruned (2026-10-06).** Only what the Windows client/server build reads is kept. The list came from MSBuild's `*.read.*.tlog` files after a full build, plus the VPC inputs, which those logs don't show (`vpc_scripts`, the `*.vpc` files, `devtools/bin/vpc.exe`).
+  - Removed: all of `sp/game` except `portalvr` (the HL2/episodic/ep2/lostcoast content, the `*_with_ashpd` mods, `model_src`), `mp/`, `gcsdk`, `thirdparty/protobuf-2.3.0`, `materialsystem`, `dx9sdk`/`dx10sdk`, `fgdlib`, the map tools in `utils`, non-Windows `devtools/bin`, the createallprojects scripts, and every unused `lib/` file (osx32/linux32/2010/2012, protobuf, matsys_controls, particles, vmpi...).
+  - The history was rewritten with `git filter-repo` (510 MB → 64 MB clone). Upstream Portal-Base can no longer be merged directly: port its changes by hand. Pre-prune backup: `../Portal-VR-Mod-backup-2026-10-06.bundle`.
+  - If a build fails on a missing header or lib, take it from Portal-Base or the backup bundle and commit only that file. Don't re-add whole folders.
+- **Built binaries stay committed** for convenience:
+  - `sp/game/portalvr/bin/client.dll` and `server.dll`: the mod.
+  - `sp/src/lib/public/*.lib`: Valve's prebuilt libs the link needs.
+  - `tier1`, `mathlib`, `raytrace` and `vgui_controls.lib` are gitignored intermediates that every build regenerates (`vgui_controls.lib` is 36 MB); keep them out of git so the history doesn't grow again.
+  - Commit the DLLs with every code change you ship.
 - **What it runs on:** the **retail** 32-bit Portal engine, in the user's Steam install `C:\Program Files (x86)\Steam\steamapps\common\Portal`.
   - The retail interfaces are the SDK 2013 SP ones: VClient017, VEngineClient014, ServerGameDLL009.
   - The renderer is shaderapidx9 with D3D9Ex.
